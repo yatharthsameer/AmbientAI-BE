@@ -1,0 +1,124 @@
+# Development override for docker-compose
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+# version field is optional in Compose v2
+
+services:
+  ambientai_be_api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+      - RELOAD=true
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload --workers 1
+    ports:
+      - "8000:8000"
+      - "5678:5678"  # For debugging
+
+  ambientai_be_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    # Use single worker for easier debugging
+    command: celery -A celery_app worker --loglevel=debug --concurrency=1 --queues=transcription,qa_extraction,processing,scoring,default
+    deploy:
+      replicas: 1
+
+  ambientai_be_transcription_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    command: celery -A celery_app worker --loglevel=debug --concurrency=1 --queues=transcription,high_priority
+
+  ambientai_be_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+  ambientai_be_flower:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    environment:
+      - FLOWER_DEBUG=true
+      - FLOWER_LOGGING=DEBUG
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@ambientai_be_postgres:5432/nurse_conversations
+      - REDIS_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_BROKER_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://ambientai_be_redis:6379/0
+      - SECRET_KEY=dev-secret-key
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+  # Add a database admin interface for development
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: ambientai_be_postgres
+    networks:
+      - ambientai_network
+
+  # Redis commander for Redis management
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    environment:
+      - REDIS_HOSTS=local:ambientai_be_redis:6379
+    ports:
+      - "8081:8081"
+    networks:
+      - ambientai_network
+
+  # Jupyter notebook for data analysis (optional)
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password=''
+    ports:
+      - "8888:8888"
+    volumes:
+      - .:/app
+      - ./notebooks:/app/notebooks
+      - ./uploads:/app/uploads
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@ambientai_be_postgres:5432/nurse_conversations
+      - JUPYTER_ENABLE_LAB=yes
+    networks:
+      - ambientai_network

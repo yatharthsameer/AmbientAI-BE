@@ -1,0 +1,440 @@
+# AmbientAI-BE .gitignore
+# Created by Soumyadeep for healthcare conversation processing backend
+
+# ===================================
+# Environment & Configuration Files
+# ===================================
+.env
+.env.*
+!.env.example
+config.local.py
+secrets.json
+
+# ===================================
+# Python
+# ===================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+test-results/
+test-reports/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff (if applicable)
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff (if applicable)
+instance/
+.webassets-cache
+
+# Scrapy stuff (if applicable)
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# ===================================
+# Application Specific
+# ===================================
+# Upload directories
+uploads/
+temp_uploads/
+processed_files/
+
+# Log files
+logs/
+*.log
+log/
+app.log
+celery.log
+worker.log
+error.log
+access.log
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+database.db
+local.db
+
+# AI Model files (large files)
+models/
+*.model
+*.pkl
+*.joblib
+whisper_models/
+distilbert_cache/
+transformers_cache/
+
+# Audio processing temporary files
+temp_audio/
+audio_cache/
+transcription_cache/
+
+# ===================================
+# Docker
+# ===================================
+# Docker override files
+docker-compose.override.yml
+docker-compose.local.yml
+docker-compose.prod.yml
+
+# Docker volumes data
+postgres-data/
+redis-data/
+docker-data/
+
+# ===================================
+# IDE & Editor Files
+# ===================================
+# VSCode
+.vscode/
+.vscode/settings.json
+.vscode/tasks.json
+.vscode/launch.json
+.vscode/extensions.json
+.vscode/c_cpp_properties.json
+.vscode/settings.json
+
+# PyCharm
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Nano
+*.save
+*.swp
+
+# ===================================
+# Operating System Files
+# ===================================
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ===================================
+# Security & Sensitive Data
+# ===================================
+# API Keys and secrets
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+api_keys.txt
+secrets.txt
+
+# SSL certificates
+ssl/
+certificates/
+certs/
+
+# ===================================
+# Backup & Temporary Files
+# ===================================
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+*.tmp
+*.temp
+
+# Archive files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# ===================================
+# Development & Testing
+# ===================================
+# Local development files
+dev/
+development/
+sandbox/
+playground/
+
+# Test data
+test_data/
+sample_data/
+mock_data/
+fixtures/
+
+# Performance profiling
+*.prof
+profiling_results/
+
+# ===================================
+# Documentation Build Files
+# ===================================
+docs/build/
+docs/_build/
+site/
+
+# ===================================
+# Package Managers
+# ===================================
+# npm (if using Node.js tools)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+package-lock.json
+yarn.lock
+
+# ===================================
+# Cloud & Deployment
+# ===================================
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+terraform.tfvars
+
+# Kubernetes
+*.kubeconfig
+
+# AWS
+.aws/
+
+# Google Cloud
+gcloud/
+*.json
+
+# ===================================
+# Monitoring & Analytics
+# ===================================
+# Prometheus
+prometheus_data/
+
+# Grafana
+grafana_data/
+
+# ===================================
+# Custom Application Directories
+# ===================================
+# Custom upload processing
+processing_queue/
+failed_uploads/
+archived_conversations/
+
+# Custom cache directories
+cache/
+.cache/
+tmp_cache/
+
+# Custom export directories
+exports/
+reports/
+analytics_data/
+
+# ===================================
+# Third-party Service Files
+# ===================================
+# Redis dump
+dump.rdb
+
+# PostgreSQL
+*.sql.gz
+pg_data/
+
+# Celery
+celerybeat-schedule.db
+
+# ===================================
+# Large Files & Media
+# ===================================
+# Audio files (except samples)
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.aac
+
+# Video files
+*.mp4
+*.avi
+*.mov
+*.wmv
+
+# Large datasets
+*.csv
+*.json
+*.xml
+# But allow small sample files
+!sample_*.csv
+!example_*.json
+!test_*.xml
+
+# ===================================
+# Local Configuration Overrides
+# ===================================
+local_config.py
+local_settings.py
+.local
+*.local
+
+# ===================================
+# End of .gitignore
+# ===================================
+
+# Note: This .gitignore is designed for AmbientAI-BE
+# Healthcare conversation processing backend
+# Created by: Soumyadeep

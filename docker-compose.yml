@@ -1,0 +1,218 @@
+# version field is optional in Compose v2
+
+services:
+  # PostgreSQL Database
+  ambientai_be_postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: nurse_conversations
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ambientai_network
+
+  # Redis for Celery broker and result backend
+  ambientai_be_redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ambientai_network
+
+  # Main FastAPI application
+  ambientai_be_api:
+    build: .
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@ambientai_be_postgres:5432/nurse_conversations
+      - REDIS_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_BROKER_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://ambientai_be_redis:6379/0
+      - UPLOAD_DIR=/app/uploads
+      - WHISPER_MODEL=base
+      - WHISPER_DEVICE=cpu
+      - SECRET_KEY=prod-secret-key-change-in-production
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    volumes:
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    depends_on:
+      ambientai_be_postgres:
+        condition: service_healthy
+      ambientai_be_redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - ambientai_network
+
+  # Celery workers for background tasks
+  ambientai_be_worker:
+    build: .
+    command: celery -A celery_app worker --loglevel=info --concurrency=4 --queues=transcription,qa_extraction,processing,scoring,default
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@ambientai_be_postgres:5432/nurse_conversations
+      - REDIS_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_BROKER_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://ambientai_be_redis:6379/0
+      - UPLOAD_DIR=/app/uploads
+      - WHISPER_MODEL=base
+      - WHISPER_DEVICE=cpu
+      - SECRET_KEY=prod-secret-key-change-in-production
+      - LOG_LEVEL=INFO
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    volumes:
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    depends_on:
+      ambientai_be_postgres:
+        condition: service_healthy
+      ambientai_be_redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ambientai_network
+    deploy:
+      replicas: 2
+
+  # Celery worker for high-priority transcription tasks
+  ambientai_be_transcription_worker:
+    build: .
+    command: celery -A celery_app worker --loglevel=info --concurrency=2 --queues=transcription,high_priority
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@ambientai_be_postgres:5432/nurse_conversations
+      - REDIS_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_BROKER_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://ambientai_be_redis:6379/0
+      - UPLOAD_DIR=/app/uploads
+      - WHISPER_MODEL=base
+      - WHISPER_DEVICE=cpu
+      - SECRET_KEY=prod-secret-key-change-in-production
+      - LOG_LEVEL=INFO
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    volumes:
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    depends_on:
+      ambientai_be_postgres:
+        condition: service_healthy
+      ambientai_be_redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ambientai_network
+
+  # Celery Beat scheduler for periodic tasks
+  ambientai_be_beat:
+    build: .
+    command: celery -A celery_app beat --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@ambientai_be_postgres:5432/nurse_conversations
+      - REDIS_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_BROKER_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://ambientai_be_redis:6379/0
+      - SECRET_KEY=prod-secret-key-change-in-production
+      - LOG_LEVEL=INFO
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      ambientai_be_postgres:
+        condition: service_healthy
+      ambientai_be_redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ambientai_network
+
+  # Flower for Celery monitoring
+  ambientai_be_flower:
+    build: .
+    command: celery -A celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://ambientai_be_redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@ambientai_be_postgres:5432/nurse_conversations
+      - REDIS_URL=redis://ambientai_be_redis:6379/0
+      - SECRET_KEY=prod-secret-key-change-in-production
+      - FLOWER_BASIC_AUTH=admin:flower123
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    depends_on:
+      - ambientai_be_redis
+    restart: unless-stopped
+    networks:
+      - ambientai_network
+
+  # Nginx reverse proxy (optional)
+  ambientai_be_nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - ambientai_be_api
+    restart: unless-stopped
+    networks:
+      - ambientai_network
+
+  # Database migration service
+  ambientai_be_migrate:
+    build: .
+    command: alembic upgrade head
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@ambientai_be_postgres:5432/nurse_conversations
+    depends_on:
+      ambientai_be_postgres:
+        condition: service_healthy
+    networks:
+      - ambientai_network
+    restart: "no"
+
+# Volumes for persistent data
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# Networks
+networks:
+  ambientai_network:
+    driver: bridge
