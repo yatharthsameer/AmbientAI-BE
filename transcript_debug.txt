@@ -1,0 +1,33 @@
+🎵 AUDIO TRANSCRIPTION LOG
+============================================================
+📁 Audio File: harvard.wav
+🕐 Started: 2025-08-18 02:11:19
+🌐 WebSocket: ws://localhost:8001/ws/transcribe
+============================================================
+
+[001] [2025-08-18T02:11:22.380328] [FINAL] (conf: 0.923)
+    The stale smell of old beer lingers. It takes heat.
+
+[002] [2025-08-18T02:11:23.560101] [FINAL] (conf: 0.936)
+    to bring out the odor. A cold dip restores health and zest.
+
+[003] [2025-08-18T02:11:24.878921] [FINAL] (conf: 0.914)
+    A salt pickle tastes fine with ham. Tacos al pastor are my favorite.
+
+[004] [2025-08-18T02:11:25.851465] [FINAL] (conf: 0.911)
+    A zestful food is the hot cross bun.
+
+
+============================================================
+🎯 FINAL TRANSCRIPTION SUMMARY
+============================================================
+🕐 Completed: 2025-08-18 02:11:40
+📊 Total Segments: 4
+📊 Final Segments: 4
+📊 Average Confidence: 0.921
+🆔 Session ID: e547aafe-ab7c-4d3d-9ac3-79d323850c9c
+
+🎯 COMPLETE TRANSCRIPT:
+----------------------------------------
+The stale smell of old beer lingers. It takes heat. to bring out the odor. A cold dip restores health and zest. A salt pickle tastes fine with ham. Tacos al pastor are my favorite. A zestful food is the hot cross bun.
+----------------------------------------
