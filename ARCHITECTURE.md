@@ -35,7 +35,7 @@ graph TD
 
   subgraph "Data & Storage"
     redis["Redis :6379\nBroker + Result Backend"]
-    pg["PostgreSQL :5432\nconversation_* tables"]
+    pg["PostgreSQL :5432\nconversation_* , users, rag_* , answer_feedback"]
     uploads["Uploads dir /app/uploads"]
     logs["Logs /app/logs"]
   end
@@ -58,6 +58,7 @@ graph TD
     svc_openai["OpenAIService"]
     svc_distil["DistilBERTService"]
     svc_verify["FinalVerificationService"]
+    svc_rag["SimpleRAGService\n(keyword RAG)"]
   end
 
   %% Client to API
@@ -100,6 +101,9 @@ graph TD
   svc_qa --> svc_openai
   svc_qa --> svc_distil
   svc_qa --> svc_verify
+
+  %% On-the-fly RAG augmentation in API responses
+  api -->|"RAG augment results"| svc_rag
 
   %% Persist results
   t_tx -->|"write transcription"| pg
@@ -154,6 +158,7 @@ sequenceDiagram
   participant O as OpenAIService
   participant D as DistilBERTService
   participant V as FinalVerificationService
+  participant SR as SimpleRAGService (RAG)
 
   U->>A: POST /api/v1/uploads (audio)
   A->>F: Save file
@@ -208,6 +213,8 @@ sequenceDiagram
 
   U->>A: GET /api/v1/uploads/{upload_id}
   A->>DB: Load Upload + Transcription + QA
+  A->>SR: enhance_answer(question, answer, transcript)
+  SR-->>A: rag_context + guidelines_applied
   DB-->>A: Aggregated data
   A-->>U: CompleteConversationResponse
 ```
@@ -226,6 +233,7 @@ sequenceDiagram
   participant T as TranscriptionService (text_only)
   participant Q as QAExtractionService (Hybrid)
   participant DB as PostgreSQL
+  participant SR as SimpleRAGService (RAG)
 
   U->>A: POST /api/v1/text-processing { text }
   A->>DB: Insert ConversationUpload(status=pending)
@@ -257,8 +265,25 @@ sequenceDiagram
 
   U->>A: GET /api/v1/uploads/{upload_id}
   A->>DB: Load Upload + Transcription + QA + Score
+  A->>SR: enhance_answer(question, answer, transcript)
+  SR-->>A: rag_context + guidelines_applied
   DB-->>A: Aggregated data
   A-->>U: CompleteConversationResponse
+```
+
+## Feedback Collection (Sequence)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as Client
+  participant A as FastAPI (main.py)
+  participant DB as PostgreSQL
+
+  U->>A: POST /api/v1/feedback/collect { question_answer_id, is_correct, ... }
+  A->>DB: Validate QA exists, insert AnswerFeedback
+  DB-->>A: feedback_id
+  A-->>U: { success: true, feedback_id }
 ```
 
 ## Database ER Model
@@ -271,6 +296,11 @@ erDiagram
   CONVERSATION_UPLOADS ||--o{ QUESTION_ANSWERS : has
   CONVERSATION_UPLOADS ||--o| CONVERSATION_SCORES : has_one
   CONVERSATION_UPLOADS ||--o{ PROCESSING_JOBS : has
+  USERS ||--o{ CONVERSATION_UPLOADS : uploaded_by
+  QUESTION_ANSWERS ||--o{ ANSWER_FEEDBACK : has
+  USERS ||--o{ ANSWER_FEEDBACK : submits
+  USERS ||--o{ RAG_GUIDELINES : created_by
+  USERS ||--o{ RAG_QA_PAIRS : created_by
 
   CONVERSATION_UPLOADS {
     UUID id PK
@@ -357,6 +387,58 @@ erDiagram
     int answers_requiring_review
     float transcription_quality_score
     datetime scores_calculated_at
+    datetime created_at
+    datetime updated_at
+  }
+
+  USERS {
+    UUID id PK
+    string email
+    string name
+    string role
+    bool is_active
+    string password_hash
+    datetime created_at
+    datetime updated_at
+  }
+
+  ANSWER_FEEDBACK {
+    UUID id PK
+    UUID question_answer_id FK
+    bool is_correct
+    text corrected_answer
+    text feedback_notes
+    int confidence_rating
+    string feedback_source
+    datetime feedback_timestamp
+    UUID submitted_by_user_id FK
+    datetime created_at
+    datetime updated_at
+  }
+
+  RAG_GUIDELINES {
+    UUID id PK
+    string title
+    text content
+    string content_type
+    string specialty
+    string source
+    json keywords
+    json medical_terms
+    UUID created_by_user_id FK
+    datetime created_at
+    datetime updated_at
+  }
+
+  RAG_QA_PAIRS {
+    UUID id PK
+    text question
+    text answer
+    string specialty
+    string source
+    json keywords
+    json medical_terms
+    UUID created_by_user_id FK
     datetime created_at
     datetime updated_at
   }

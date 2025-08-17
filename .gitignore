@@ -422,6 +422,8 @@ celerybeat-schedule.db
 !sample_*.csv
 !example_*.json
 !test_*.xml
+# Allow Postman collections (documentation/testing)
+!/AmbientAI-BE API.postman_collection.json
 
 # ===================================
 # Local Configuration Overrides
