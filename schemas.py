@@ -42,6 +42,15 @@ class ConversationCategory(str, Enum):
     PATIENT_FEEDBACK = "patient_feedback"
 
 
+class SessionStatus(str, Enum):
+    """Real-time session status enumeration."""
+
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    TERMINATED = "terminated"
+
+
 # Base schemas
 class BaseSchema(BaseModel):
     """Base schema with common configuration."""
@@ -304,3 +313,136 @@ class SystemMetrics(BaseSchema):
     average_response_time: float
     error_rate: float
     uptime_seconds: int
+
+
+# Real-time WebSocket schemas
+class RealTimeSessionResponse(BaseSchema):
+    """Schema for real-time session information."""
+
+    id: uuid.UUID
+    session_id: str
+    client_id: Optional[str] = None
+    status: SessionStatus
+    sample_rate: int
+    channels: int
+    chunk_duration: float
+    whisper_model: str
+    language: Optional[str] = None
+    total_audio_duration: float
+    chunks_processed: int
+    full_transcript: str
+    connected_at: datetime
+    last_activity_at: datetime
+    disconnected_at: Optional[datetime] = None
+
+
+class RealTimeTranscriptChunkResponse(BaseSchema):
+    """Schema for real-time transcript chunk."""
+
+    id: uuid.UUID
+    chunk_index: int
+    start_time: float
+    end_time: float
+    text: str
+    confidence_score: Optional[float] = None
+    model_used: str
+    processing_time_ms: int
+    audio_duration: float
+    audio_size_bytes: int
+    is_final: bool
+    is_corrected: bool
+    created_at: datetime
+
+
+class RealTimeSessionMetricsResponse(BaseSchema):
+    """Schema for real-time session performance metrics."""
+
+    session_id: uuid.UUID
+    avg_processing_time_ms: float
+    max_processing_time_ms: int
+    min_processing_time_ms: int
+    avg_confidence_score: float
+    total_chunks: int
+    successful_chunks: int
+    failed_chunks: int
+    avg_chunk_size_bytes: int
+    total_data_received_bytes: int
+    connection_drops: int
+    real_time_factor: float
+    latency_ms: int
+    transcript_completeness: float
+    estimated_accuracy: Optional[float] = None
+
+
+class WebSocketConnectionConfig(BaseSchema):
+    """Schema for WebSocket connection configuration."""
+
+    sample_rate: int = 16000
+    channels: int = 1
+    chunk_duration: float = 2.0
+    whisper_model: str = "base"
+    language: Optional[str] = None
+
+
+class WebSocketMessage(BaseSchema):
+    """Base schema for WebSocket messages."""
+
+    type: str
+    timestamp: Optional[datetime] = None
+
+
+class WebSocketConnectedMessage(WebSocketMessage):
+    """Schema for WebSocket connection confirmation."""
+
+    type: str = "connected"
+    session_id: str
+    message: str
+    config: WebSocketConnectionConfig
+
+
+class WebSocketTranscriptMessage(WebSocketMessage):
+    """Schema for WebSocket transcript message."""
+
+    type: str = "transcript"
+    text: str
+    confidence: float
+    chunk_index: int
+    start_time: float
+    end_time: float
+    processing_time_ms: int
+    model_used: str
+    is_final: bool = True
+
+
+class WebSocketErrorMessage(WebSocketMessage):
+    """Schema for WebSocket error message."""
+
+    type: str = "error"
+    message: str
+    error_code: Optional[str] = None
+
+
+class WebSocketSessionInfoMessage(WebSocketMessage):
+    """Schema for WebSocket session information message."""
+
+    type: str = "session_info"
+    session_id: str
+    connected_at: datetime
+    total_chunks: int
+    full_transcript: str
+    metrics: Dict[str, Any]
+
+
+class WebSocketControlMessage(BaseSchema):
+    """Schema for WebSocket control messages from client."""
+
+    type: str  # ping, session_info, end_session
+    data: Optional[Dict[str, Any]] = None
+
+
+class ActiveWebSocketSessionsResponse(BaseSchema):
+    """Schema for active WebSocket sessions response."""
+
+    active_sessions: int
+    max_connections: int
+    sessions: List[Dict[str, Any]]

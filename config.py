@@ -87,67 +87,94 @@ class SecuritySettings(BaseModel):
     algorithm: str = "HS256"
 
 
+class WebSocketSettings(BaseModel):
+    """WebSocket configuration settings."""
+
+    max_connections: int = 100
+    heartbeat_interval: int = 30  # seconds
+    chunk_timeout: int = 10  # seconds
+    max_session_duration: int = 7200  # 2 hours in seconds
+    audio_buffer_size: int = 8192  # bytes
+    sample_rate: int = 16000
+    channels: int = 1
+    chunk_duration: float = 3.0  # seconds - Longer chunks for better context
+    overlap_duration: float = 0.2  # seconds - Reduced overlap to minimize repetition
+    whisper_model_realtime: str = "base"  # Use smaller model for real-time
+
+
 class Settings(BaseSettings):
     """Main application settings."""
-    
+
     # Application
     debug: bool = False
     host: str = "0.0.0.0"
     port: int = 8000
     workers: int = 4
     log_level: str = "INFO"
-    
+
     # Database
     database_url: str
-    
+
     # Redis
     redis_url: str
-    
+
     # Celery
     celery_broker_url: str
     celery_result_backend: str
-    
+
     # File Upload
     upload_dir: str = "./uploads"
     max_file_size: int = 104857600  # 100MB
     allowed_audio_formats: str = "mp3,wav,m4a,ogg,flac"
-    
+
     # ASR
     whisper_model: str = "base"
     whisper_device: str = "cpu"
-    
+
     # Q&A
     qa_model: str = "distilbert-base-cased-distilled-squad"
     max_question_length: int = 512
     max_context_length: int = 4096
-    
+
     # AI Services
     gemini_api_key: str = ""
     openai_api_key: str = ""
-    
+
     # Security
     secret_key: str
     access_token_expire_minutes: int = 30
-    
+
+    # WebSocket Settings
+    websocket_max_connections: int = 100
+    websocket_heartbeat_interval: int = 30
+    websocket_chunk_timeout: int = 10
+    websocket_max_session_duration: int = 7200
+    websocket_audio_buffer_size: int = 8192
+    websocket_sample_rate: int = 16000
+    websocket_channels: int = 1
+    websocket_chunk_duration: float = 3.0  # Longer chunks for better context
+    websocket_overlap_duration: float = 0.2  # Reduced overlap to minimize repetition
+    websocket_whisper_model: str = "base"
+
     class Config:
         env_file = ".env"
         case_sensitive = False
-    
+
     @property
     def database_settings(self) -> DatabaseSettings:
         return DatabaseSettings(url=self.database_url)
-    
+
     @property
     def redis_settings(self) -> RedisSettings:
         return RedisSettings(url=self.redis_url)
-    
+
     @property
     def celery_settings(self) -> CelerySettings:
         return CelerySettings(
             broker_url=self.celery_broker_url,
             result_backend=self.celery_result_backend
         )
-    
+
     @property
     def file_upload_settings(self) -> FileUploadSettings:
         return FileUploadSettings(
@@ -155,31 +182,46 @@ class Settings(BaseSettings):
             max_file_size=self.max_file_size,
             allowed_audio_formats=self.allowed_audio_formats.split(",")
         )
-    
+
     @property
     def asr_settings(self) -> ASRSettings:
         return ASRSettings(
             whisper_model=self.whisper_model,
             device=self.whisper_device
         )
-    
+
     @property
     def qa_settings(self) -> QASettings:
         return QASettings(model_name=self.qa_model)
-    
+
     @property
     def gemini_settings(self) -> GeminiSettings:
         return GeminiSettings(api_key=self.gemini_api_key)
-    
+
     @property
     def openai_settings(self) -> OpenAISettings:
         return OpenAISettings(api_key=self.openai_api_key)
-    
+
     @property
     def security_settings(self) -> SecuritySettings:
         return SecuritySettings(
             secret_key=self.secret_key,
             access_token_expire_minutes=self.access_token_expire_minutes
+        )
+
+    @property
+    def websocket_settings(self) -> WebSocketSettings:
+        return WebSocketSettings(
+            max_connections=self.websocket_max_connections,
+            heartbeat_interval=self.websocket_heartbeat_interval,
+            chunk_timeout=self.websocket_chunk_timeout,
+            max_session_duration=self.websocket_max_session_duration,
+            audio_buffer_size=self.websocket_audio_buffer_size,
+            sample_rate=self.websocket_sample_rate,
+            channels=self.websocket_channels,
+            chunk_duration=self.websocket_chunk_duration,
+            overlap_duration=self.websocket_overlap_duration,
+            whisper_model_realtime=self.websocket_whisper_model,
         )
 
 

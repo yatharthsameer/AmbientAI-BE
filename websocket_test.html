@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Real-Time Transcription Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        
+        button.primary {
+            background-color: #007bff;
+            color: white;
+        }
+        
+        button.primary:hover {
+            background-color: #0056b3;
+        }
+        
+        button.success {
+            background-color: #28a745;
+            color: white;
+        }
+        
+        button.success:hover {
+            background-color: #1e7e34;
+        }
+        
+        button.danger {
+            background-color: #dc3545;
+            color: white;
+        }
+        
+        button.danger:hover {
+            background-color: #c82333;
+        }
+        
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+        
+        .status.connected {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .status.disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .status.connecting {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        
+        .transcript-container {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 20px;
+            min-height: 200px;
+            max-height: 400px;
+            overflow-y: auto;
+            background-color: #f8f9fa;
+            margin-bottom: 20px;
+        }
+        
+        .transcript-chunk {
+            margin-bottom: 10px;
+            padding: 8px;
+            border-left: 3px solid #007bff;
+            background-color: white;
+            border-radius: 3px;
+        }
+        
+        .chunk-meta {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        
+        .chunk-text {
+            font-size: 16px;
+            color: #333;
+        }
+        
+        .logs {
+            background-color: #000;
+            color: #00ff00;
+            padding: 15px;
+            border-radius: 5px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+        
+        .log-entry {
+            margin-bottom: 5px;
+        }
+        
+        .log-timestamp {
+            color: #888;
+        }
+        
+        .audio-controls {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        
+        .audio-controls h3 {
+            margin-top: 0;
+            color: #333;
+        }
+        
+        .recording-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            background-color: #dc3545;
+            border-radius: 50%;
+            margin-right: 5px;
+            animation: pulse 1s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .metric-card {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            border: 1px solid #dee2e6;
+        }
+        
+        .metric-title {
+            font-weight: bold;
+            color: #495057;
+            margin-bottom: 5px;
+        }
+        
+        .metric-value {
+            font-size: 18px;
+            color: #007bff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 WebSocket Real-Time Transcription Test</h1>
+        
+        <div id="status" class="status disconnected">
+            Disconnected
+        </div>
+        
+        <div class="controls">
+            <button id="connectBtn" class="primary">Connect</button>
+            <button id="disconnectBtn" class="danger" disabled>Disconnect</button>
+            <button id="startRecordingBtn" class="success" disabled>Start Recording</button>
+            <button id="stopRecordingBtn" class="danger" disabled>Stop Recording</button>
+            <button id="clearTranscriptBtn" class="primary">Clear Transcript</button>
+            <button id="sessionInfoBtn" class="primary" disabled>Session Info</button>
+        </div>
+        
+        <div class="audio-controls">
+            <h3>Audio Settings</h3>
+            <label>
+                Server URL: 
+                <input type="text" id="serverUrl" value="ws://localhost:8000/ws/transcribe" style="width: 300px; padding: 5px;">
+            </label>
+            <br><br>
+            <label>
+                Session ID (optional): 
+                <input type="text" id="sessionId" placeholder="Leave empty for auto-generated" style="width: 300px; padding: 5px;">
+            </label>
+        </div>
+        
+        <div class="transcript-container" id="transcriptContainer">
+            <p style="color: #666; text-align: center; margin: 50px 0;">
+                Transcript will appear here...
+            </p>
+        </div>
+        
+        <div class="metrics" id="metrics" style="display: none;">
+            <div class="metric-card">
+                <div class="metric-title">Chunks Processed</div>
+                <div class="metric-value" id="chunksProcessed">0</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">Avg Processing Time</div>
+                <div class="metric-value" id="avgProcessingTime">0 ms</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">Real-time Factor</div>
+                <div class="metric-value" id="realtimeFactor">0.00</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">Session Duration</div>
+                <div class="metric-value" id="sessionDuration">0 s</div>
+            </div>
+        </div>
+        
+        <div class="logs" id="logs"></div>
+    </div>
+
+    <script>
+        class WebSocketTranscriptionClient {
+            constructor() {
+                this.ws = null;
+                this.mediaRecorder = null;
+                this.audioContext = null;
+                this.isRecording = false;
+                this.isConnected = false;
+                this.sessionId = null;
+                this.chunkCounter = 0;
+                this.sessionStartTime = null;
+                
+                this.initializeElements();
+                this.attachEventListeners();
+            }
+            
+            initializeElements() {
+                this.elements = {
+                    status: document.getElementById('status'),
+                    connectBtn: document.getElementById('connectBtn'),
+                    disconnectBtn: document.getElementById('disconnectBtn'),
+                    startRecordingBtn: document.getElementById('startRecordingBtn'),
+                    stopRecordingBtn: document.getElementById('stopRecordingBtn'),
+                    clearTranscriptBtn: document.getElementById('clearTranscriptBtn'),
+                    sessionInfoBtn: document.getElementById('sessionInfoBtn'),
+                    transcriptContainer: document.getElementById('transcriptContainer'),
+                    logs: document.getElementById('logs'),
+                    serverUrl: document.getElementById('serverUrl'),
+                    sessionId: document.getElementById('sessionId'),
+                    metrics: document.getElementById('metrics'),
+                    chunksProcessed: document.getElementById('chunksProcessed'),
+                    avgProcessingTime: document.getElementById('avgProcessingTime'),
+                    realtimeFactor: document.getElementById('realtimeFactor'),
+                    sessionDuration: document.getElementById('sessionDuration')
+                };
+            }
+            
+            attachEventListeners() {
+                this.elements.connectBtn.addEventListener('click', () => this.connect());
+                this.elements.disconnectBtn.addEventListener('click', () => this.disconnect());
+                this.elements.startRecordingBtn.addEventListener('click', () => this.startRecording());
+                this.elements.stopRecordingBtn.addEventListener('click', () => this.stopRecording());
+                this.elements.clearTranscriptBtn.addEventListener('click', () => this.clearTranscript());
+                this.elements.sessionInfoBtn.addEventListener('click', () => this.requestSessionInfo());
+            }
+            
+            log(message, type = 'info') {
+                const timestamp = new Date().toLocaleTimeString();
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry';
+                logEntry.innerHTML = `<span class="log-timestamp">${timestamp}</span> ${message}`;
+                
+                this.elements.logs.appendChild(logEntry);
+                this.elements.logs.scrollTop = this.elements.logs.scrollHeight;
+            }
+            
+            updateStatus(status, message) {
+                this.elements.status.className = `status ${status}`;
+                this.elements.status.textContent = message;
+            }
+            
+            async connect() {
+                try {
+                    this.updateStatus('connecting', 'Connecting...');
+                    this.log('Attempting to connect to WebSocket server...');
+                    
+                    const serverUrl = this.elements.serverUrl.value;
+                    const sessionId = this.elements.sessionId.value.trim();
+                    
+                    let wsUrl = serverUrl;
+                    if (sessionId) {
+                        wsUrl = serverUrl.replace('/ws/transcribe', `/ws/transcribe/${sessionId}`);
+                    }
+                    
+                    this.ws = new WebSocket(wsUrl);
+                    
+                    this.ws.onopen = () => {
+                        this.isConnected = true;
+                        this.sessionStartTime = Date.now();
+                        this.updateStatus('connected', 'Connected');
+                        this.log('✅ Connected to WebSocket server');
+                        this.updateButtonStates();
+                    };
+                    
+                    this.ws.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            this.handleMessage(data);
+                        } catch (e) {
+                            this.log(`❌ Failed to parse message: ${e.message}`);
+                        }
+                    };
+                    
+                    this.ws.onclose = (event) => {
+                        this.isConnected = false;
+                        this.updateStatus('disconnected', 'Disconnected');
+                        this.log(`🔌 WebSocket closed: ${event.reason || 'Unknown reason'}`);
+                        this.updateButtonStates();
+                    };
+                    
+                    this.ws.onerror = (error) => {
+                        this.log(`❌ WebSocket error: ${error.message || 'Unknown error'}`);
+                    };
+                    
+                } catch (error) {
+                    this.log(`❌ Connection failed: ${error.message}`);
+                    this.updateStatus('disconnected', 'Connection failed');
+                }
+            }
+            
+            disconnect() {
+                if (this.ws) {
+                    this.stopRecording();
+                    this.ws.close();
+                    this.ws = null;
+                }
+            }
+            
+            handleMessage(data) {
+                const type = data.type;
+                this.log(`📨 Received: ${type} - ${JSON.stringify(data).substring(0, 100)}...`);
+                
+                switch (type) {
+                    case 'connected':
+                        this.sessionId = data.session_id;
+                        this.log(`🎉 Session established: ${this.sessionId}`);
+                        break;
+                        
+                    case 'transcript':
+                        this.addTranscriptChunk(data);
+                        this.chunkCounter++;
+                        this.updateMetrics(data);
+                        break;
+                        
+                    case 'error':
+                        this.log(`❌ Server error: ${data.message}`, 'error');
+                        break;
+                        
+                    case 'session_info':
+                        this.displaySessionInfo(data);
+                        break;
+                        
+                    case 'pong':
+                        this.log('🏓 Pong received');
+                        break;
+                        
+                    default:
+                        this.log(`📋 Unknown message type: ${type}`);
+                }
+            }
+            
+            addTranscriptChunk(data) {
+                const chunk = document.createElement('div');
+                chunk.className = 'transcript-chunk';
+                
+                const meta = document.createElement('div');
+                meta.className = 'chunk-meta';
+                meta.textContent = `Chunk ${data.chunk_index || 0} | Confidence: ${(data.confidence || 0).toFixed(2)} | ${data.processing_time_ms || 0}ms`;
+                
+                const text = document.createElement('div');
+                text.className = 'chunk-text';
+                text.textContent = data.text || '';
+                
+                chunk.appendChild(meta);
+                chunk.appendChild(text);
+                
+                // Clear placeholder text if this is the first chunk
+                if (this.elements.transcriptContainer.children.length === 1 && 
+                    this.elements.transcriptContainer.children[0].tagName === 'P') {
+                    this.elements.transcriptContainer.innerHTML = '';
+                }
+                
+                this.elements.transcriptContainer.appendChild(chunk);
+                this.elements.transcriptContainer.scrollTop = this.elements.transcriptContainer.scrollHeight;
+            }
+            
+            updateMetrics(data) {
+                this.elements.metrics.style.display = 'grid';
+                this.elements.chunksProcessed.textContent = this.chunkCounter;
+                
+                if (data.processing_time_ms) {
+                    this.elements.avgProcessingTime.textContent = `${data.processing_time_ms} ms`;
+                }
+                
+                if (this.sessionStartTime) {
+                    const duration = (Date.now() - this.sessionStartTime) / 1000;
+                    this.elements.sessionDuration.textContent = `${duration.toFixed(1)} s`;
+                }
+            }
+            
+            displaySessionInfo(data) {
+                this.log(`📊 Session Info: ${data.total_chunks} chunks, transcript length: ${data.full_transcript?.length || 0}`);
+                
+                const metrics = data.metrics || {};
+                if (metrics.avg_processing_time_ms) {
+                    this.elements.avgProcessingTime.textContent = `${metrics.avg_processing_time_ms.toFixed(1)} ms`;
+                }
+                if (metrics.real_time_factor) {
+                    this.elements.realtimeFactor.textContent = metrics.real_time_factor.toFixed(2);
+                }
+            }
+            
+            async startRecording() {
+                try {
+                    this.log('🎤 Requesting microphone access...');
+                    
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        audio: {
+                            sampleRate: 16000,
+                            channelCount: 1,
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true
+                        }
+                    });
+                    
+                    this.audioContext = new AudioContext({ sampleRate: 16000 });
+                    const source = this.audioContext.createMediaStreamSource(stream);
+                    
+                    // Use ScriptProcessorNode for better compatibility (no CORS issues)
+                    const bufferSize = 4096;
+                    const processor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
+                    
+                    processor.onaudioprocess = (event) => {
+                        if (this.isRecording && this.ws && this.ws.readyState === WebSocket.OPEN) {
+                            const inputData = event.inputBuffer.getChannelData(0);
+                            
+                            // Convert float32 to int16
+                            const int16Data = new Int16Array(inputData.length);
+                            for (let i = 0; i < inputData.length; i++) {
+                                const sample = Math.max(-1, Math.min(1, inputData[i]));
+                                int16Data[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+                            }
+                            
+                            // Send as binary data
+                            this.ws.send(int16Data.buffer);
+                        }
+                    };
+                    
+                    source.connect(processor);
+                    processor.connect(this.audioContext.destination);
+                    
+                    this.isRecording = true;
+                    this.mediaStream = stream;
+                    this.audioProcessor = processor;
+                    this.updateButtonStates();
+                    this.log('✅ Recording started');
+                    
+                } catch (error) {
+                    this.log(`❌ Recording failed: ${error.message}`);
+                }
+            }
+            
+            stopRecording() {
+                if (this.audioProcessor) {
+                    this.audioProcessor.disconnect();
+                    this.audioProcessor = null;
+                }
+                
+                if (this.mediaStream) {
+                    this.mediaStream.getTracks().forEach(track => track.stop());
+                    this.mediaStream = null;
+                }
+                
+                if (this.audioContext) {
+                    this.audioContext.close();
+                    this.audioContext = null;
+                }
+                
+                this.isRecording = false;
+                this.log('⏹️ Recording stopped');
+                this.updateButtonStates();
+            }
+            
+            clearTranscript() {
+                this.elements.transcriptContainer.innerHTML = '<p style="color: #666; text-align: center; margin: 50px 0;">Transcript will appear here...</p>';
+                this.chunkCounter = 0;
+                this.elements.chunksProcessed.textContent = '0';
+            }
+            
+            requestSessionInfo() {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({ type: 'session_info' }));
+                }
+            }
+            
+            updateButtonStates() {
+                this.elements.connectBtn.disabled = this.isConnected;
+                this.elements.disconnectBtn.disabled = !this.isConnected;
+                this.elements.startRecordingBtn.disabled = !this.isConnected || this.isRecording;
+                this.elements.stopRecordingBtn.disabled = !this.isRecording;
+                this.elements.sessionInfoBtn.disabled = !this.isConnected;
+                
+                // Update recording indicator
+                if (this.isRecording) {
+                    this.elements.startRecordingBtn.innerHTML = '<span class="recording-indicator"></span>Recording...';
+                } else {
+                    this.elements.startRecordingBtn.innerHTML = 'Start Recording';
+                }
+            }
+        }
+        
+        // Initialize the client when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new WebSocketTranscriptionClient();
+        });
+    </script>
+</body>
+</html>

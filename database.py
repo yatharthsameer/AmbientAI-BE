@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
     async_sessionmaker
 )
-from sqlalchemy.pool import QueuePool
+from sqlalchemy.pool import QueuePool, AsyncAdaptedQueuePool
 from loguru import logger
 
 from config import get_settings
@@ -21,55 +21,54 @@ from database_models import Base
 
 class DatabaseManager:
     """Database connection and session manager."""
-    
+
     def __init__(self):
         self._engine: Optional[AsyncEngine] = None
         self._session_factory: Optional[async_sessionmaker[AsyncSession]] = None
         self._settings = get_settings()
-    
+
     def create_engine(self) -> AsyncEngine:
         """Create and configure the async database engine."""
         if self._engine is not None:
             return self._engine
-        
+
         db_settings = self._settings.database_settings
-        
+
         # Engine configuration
         engine_kwargs = {
             "echo": db_settings.echo,
             "future": True,
-            "poolclass": QueuePool,
-            "pool_size": db_settings.pool_size,
-            "max_overflow": db_settings.max_overflow,
             "pool_pre_ping": True,  # Validate connections
-            "pool_recycle": 3600,   # Recycle connections every hour
+            "pool_recycle": 3600,  # Recycle connections every hour
         }
-        
-        # Handle SQLite vs PostgreSQL
+
+        # Add pool configuration for PostgreSQL
+        if not db_settings.url.startswith("sqlite"):
+            engine_kwargs.update(
+                {
+                    "poolclass": AsyncAdaptedQueuePool,
+                    "pool_size": db_settings.pool_size,
+                    "max_overflow": db_settings.max_overflow,
+                }
+            )
+
+        # Handle SQLite-specific configuration
         if db_settings.url.startswith("sqlite"):
-            # SQLite-specific configuration
-            engine_kwargs["connect_args"] = {
-                "check_same_thread": False,
-                "timeout": 30
-            }
-            # Remove PostgreSQL-specific options for SQLite
-            engine_kwargs.pop("poolclass", None)
-            engine_kwargs.pop("pool_size", None)
-            engine_kwargs.pop("max_overflow", None)
-        
+            engine_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
+
         self._engine = create_async_engine(
             db_settings.url,
             **engine_kwargs
         )
-        
+
         logger.info(f"Database engine created for: {db_settings.url.split('@')[-1] if '@' in db_settings.url else 'SQLite'}")
         return self._engine
-    
+
     def create_session_factory(self) -> async_sessionmaker[AsyncSession]:
         """Create the async session factory."""
         if self._session_factory is not None:
             return self._session_factory
-        
+
         engine = self.create_engine()
         self._session_factory = async_sessionmaker(
             bind=engine,
@@ -78,10 +77,10 @@ class DatabaseManager:
             autoflush=True,
             autocommit=False
         )
-        
+
         logger.info("Database session factory created")
         return self._session_factory
-    
+
     async def create_tables(self):
         """Create all database tables."""
         engine = self.create_engine()
@@ -97,7 +96,7 @@ class DatabaseManager:
                     await conn.exec_driver_sql("SELECT pg_advisory_unlock(1183372841)")
                 except Exception:
                     pass
-    
+
     async def drop_tables(self):
         """Drop all database tables (use with caution!)."""
         engine = self.create_engine()
@@ -105,7 +104,7 @@ class DatabaseManager:
             logger.warning("Dropping all database tables...")
             await conn.run_sync(Base.metadata.drop_all)
             logger.warning("All database tables dropped")
-    
+
     async def check_connection(self) -> bool:
         """Check if database connection is working."""
         try:
@@ -117,7 +116,7 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Database connection check failed: {e}")
             return False
-    
+
     @asynccontextmanager
     async def get_session(self) -> AsyncGenerator[AsyncSession, None]:
         """Get an async database session."""
@@ -132,19 +131,19 @@ class DatabaseManager:
             raise
         finally:
             await session.close()
-    
+
     async def close(self):
         """Close the database engine and all connections."""
         if self._engine:
             logger.info("Closing database connections...")
             await self._engine.dispose()
             logger.info("Database connections closed")
-    
+
     @property
     def engine(self) -> AsyncEngine:
         """Get the database engine."""
         return self.create_engine()
-    
+
     @property
     def session_factory(self) -> async_sessionmaker[AsyncSession]:
         """Get the session factory."""

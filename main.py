@@ -6,7 +6,18 @@ import time
 from contextlib import asynccontextmanager
 from typing import List, Optional
 from datetime import datetime
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, BackgroundTasks, status, Query
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    UploadFile,
+    File,
+    Depends,
+    BackgroundTasks,
+    status,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
@@ -34,6 +45,7 @@ from qa_extraction import QAExtractionService
 from tasks import process_conversation_complete, process_text_only
 from helpers import save_upload_file, get_file_duration
 from services.qa_service import QAService, AIProvider
+from websocket_transcription import ws_transcription_manager
 
 # Request models for test endpoints
 from pydantic import BaseModel
@@ -565,20 +577,20 @@ async def test_medical_extraction(request: MedicalExtractionRequest):
     """
     try:
         settings = get_settings()
-        
+
         # Initialize QA service
         qa_service = QAService(
             gemini_settings=settings.gemini_settings if settings.gemini_settings.api_key else None,
             openai_settings=settings.openai_settings if settings.openai_settings.api_key else None,
             default_provider=request.provider
         )
-        
+
         if not qa_service.is_provider_available(request.provider):
             raise HTTPException(
                 status_code=400,
                 detail=f"Provider {request.provider} not available. Check API keys."
             )
-        
+
         # Sample medical questions
         sample_questions = [
             {"id": "patient_name", "question": "What is the patient's name?"},
@@ -586,27 +598,306 @@ async def test_medical_extraction(request: MedicalExtractionRequest):
             {"id": "symptoms", "question": "What symptoms is the patient experiencing?"},
             {"id": "medications", "question": "What medications is the patient taking?"}
         ]
-        
+
         # Extract medical information
         result = await qa_service.extract_medical_info(
             conversation_text=request.conversation_text,
             questions=sample_questions,
             provider=request.provider
         )
-        
+
         return {
             "success": True,
             "provider": request.provider,
             "extracted_info": result,
             "questions_processed": len(sample_questions)
         }
-        
+
     except Exception as e:
         logger.error(f"Medical extraction test failed: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Medical extraction test failed: {str(e)}"
         )
+
+
+# WebSocket endpoints for real-time transcription
+
+
+@app.websocket("/ws/transcribe")
+async def websocket_transcribe(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time audio transcription.
+
+    Protocol:
+    - Send binary audio data (PCM 16-bit, 16kHz, mono)
+    - Receive JSON messages with transcription results
+    - Send text messages for control (ping, session_info, end_session)
+    """
+    session_id = str(uuid.uuid4())
+
+    try:
+        # Connect to WebSocket transcription manager
+        connection_success = await ws_transcription_manager.connect(
+            websocket, session_id
+        )
+
+        if not connection_success:
+            logger.warning(f"WebSocket connection rejected for session {session_id}")
+            return
+
+        logger.info(f"WebSocket session started: {session_id}")
+
+        while True:
+            try:
+                # Check WebSocket state before receiving
+                if websocket.client_state.name == "DISCONNECTED":
+                    logger.info(
+                        f"WebSocket client disconnected (state check): {session_id}"
+                    )
+                    break
+
+                # Check if we should receive binary or text data
+                message = await websocket.receive()
+
+                # Check for disconnect message first
+                if message.get("type") == "websocket.disconnect":
+                    logger.info(
+                        f"WebSocket disconnect message received for {session_id}"
+                    )
+                    break
+
+                if "bytes" in message:
+                    # Handle binary audio data
+                    audio_data = message["bytes"]
+                    await ws_transcription_manager.process_audio_data(
+                        session_id, audio_data
+                    )
+
+                elif "text" in message:
+                    # Handle text control messages
+                    try:
+                        import json
+
+                        text_message = json.loads(message["text"])
+                        await ws_transcription_manager.handle_text_message(
+                            session_id, text_message
+                        )
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            f"Invalid JSON message from {session_id}: {message['text']}"
+                        )
+                        await ws_transcription_manager.send_message(
+                            session_id,
+                            {"type": "error", "message": "Invalid JSON format"},
+                        )
+
+            except WebSocketDisconnect:
+                logger.info(f"WebSocket client disconnected: {session_id}")
+                break
+
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(
+                    f"Error processing WebSocket message for {session_id}: {error_msg}"
+                )
+
+                # Check if this is a disconnect-related error (break the loop immediately)
+                if "disconnect" in error_msg.lower() or "receive" in error_msg.lower():
+                    logger.info(
+                        f"WebSocket connection closed for {session_id}: {error_msg}"
+                    )
+                    break
+
+                # For other errors, try to send error message
+                try:
+                    await ws_transcription_manager.send_message(
+                        session_id,
+                        {
+                            "type": "error",
+                            "message": f"Message processing failed: {error_msg}",
+                        },
+                    )
+                except:
+                    # If we can't send the error message, the connection is likely broken
+                    logger.warning(
+                        f"Could not send error message to {session_id}, connection likely broken"
+                    )
+                    break
+
+    except Exception as e:
+        logger.error(f"WebSocket error for {session_id}: {e}")
+
+    finally:
+        # Clean up connection
+        await ws_transcription_manager.disconnect(session_id, "Connection closed")
+
+
+@app.websocket("/ws/transcribe/{session_id}")
+async def websocket_transcribe_session(websocket: WebSocket, session_id: str):
+    """
+    WebSocket endpoint for resuming or connecting to a specific session.
+
+    Args:
+        session_id: Existing session ID to resume or new custom session ID
+    """
+    try:
+        # Validate session ID format
+        if not session_id or len(session_id.strip()) == 0:
+            await websocket.close(code=1008, reason="Invalid session ID")
+            return
+
+        # Connect to WebSocket transcription manager
+        connection_success = await ws_transcription_manager.connect(
+            websocket, session_id
+        )
+
+        if not connection_success:
+            logger.warning(f"WebSocket connection rejected for session {session_id}")
+            return
+
+        logger.info(f"WebSocket session connected with custom ID: {session_id}")
+
+        while True:
+            try:
+                # Check WebSocket state before receiving
+                if websocket.client_state.name == "DISCONNECTED":
+                    logger.info(
+                        f"WebSocket client disconnected (state check): {session_id}"
+                    )
+                    break
+
+                message = await websocket.receive()
+
+                # Check for disconnect message first
+                if message.get("type") == "websocket.disconnect":
+                    logger.info(
+                        f"WebSocket disconnect message received for {session_id}"
+                    )
+                    break
+
+                if "bytes" in message:
+                    # Handle binary audio data
+                    audio_data = message["bytes"]
+                    await ws_transcription_manager.process_audio_data(
+                        session_id, audio_data
+                    )
+
+                elif "text" in message:
+                    # Handle text control messages
+                    try:
+                        import json
+
+                        text_message = json.loads(message["text"])
+                        await ws_transcription_manager.handle_text_message(
+                            session_id, text_message
+                        )
+                    except json.JSONDecodeError:
+                        await ws_transcription_manager.send_message(
+                            session_id,
+                            {"type": "error", "message": "Invalid JSON format"},
+                        )
+
+            except WebSocketDisconnect:
+                logger.info(f"WebSocket client disconnected: {session_id}")
+                break
+
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(
+                    f"Error processing WebSocket message for {session_id}: {error_msg}"
+                )
+
+                # Check if this is a disconnect-related error (break the loop immediately)
+                if "disconnect" in error_msg.lower() or "receive" in error_msg.lower():
+                    logger.info(
+                        f"WebSocket connection closed for {session_id}: {error_msg}"
+                    )
+                    break
+
+                # For other errors, try to send error message
+                try:
+                    await ws_transcription_manager.send_message(
+                        session_id,
+                        {
+                            "type": "error",
+                            "message": f"Message processing failed: {error_msg}",
+                        },
+                    )
+                except:
+                    # If we can't send the error message, the connection is likely broken
+                    logger.warning(
+                        f"Could not send error message to {session_id}, connection likely broken"
+                    )
+                    break
+
+    except Exception as e:
+        logger.error(f"WebSocket error for {session_id}: {e}")
+
+    finally:
+        # Clean up connection
+        await ws_transcription_manager.disconnect(session_id, "Connection closed")
+
+
+# WebSocket management endpoints
+
+
+@app.get("/api/v1/websocket/sessions")
+async def get_active_websocket_sessions():
+    """Get information about all active WebSocket sessions."""
+    try:
+        sessions = ws_transcription_manager.get_active_sessions()
+
+        return {
+            "active_sessions": len(sessions),
+            "max_connections": ws_transcription_manager.max_connections,
+            "sessions": sessions,
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting WebSocket sessions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/websocket/sessions/{session_id}/end")
+async def end_websocket_session(session_id: str):
+    """
+    Forcefully end a WebSocket session.
+
+    Args:
+        session_id: Session ID to terminate
+    """
+    try:
+        if session_id in ws_transcription_manager.active_connections:
+            await ws_transcription_manager.disconnect(session_id, "Terminated by API")
+            return {"message": f"Session {session_id} terminated successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+    except Exception as e:
+        logger.error(f"Error ending WebSocket session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/websocket/broadcast")
+async def broadcast_to_websocket_sessions(message: dict):
+    """
+    Broadcast a message to all active WebSocket sessions.
+
+    Args:
+        message: Message dictionary to broadcast
+    """
+    try:
+        await ws_transcription_manager.broadcast_message(message)
+
+        return {
+            "message": "Broadcast sent successfully",
+            "recipients": len(ws_transcription_manager.active_connections),
+        }
+
+    except Exception as e:
+        logger.error(f"Error broadcasting WebSocket message: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

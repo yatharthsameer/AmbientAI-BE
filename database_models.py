@@ -188,39 +188,169 @@ class ProcessingJob(Base):
 
 class ConversationScore(Base):
     """Model for storing overall conversation analysis scores."""
-    
+
     __tablename__ = "conversation_scores"
-    
+
     # Foreign key
     upload_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("conversation_uploads.id"),
         nullable=False,
         unique=True
     )
-    
+
     # Overall scores
     completeness_score: Mapped[float] = mapped_column(Float, nullable=False)  # 0-1
     confidence_score: Mapped[float] = mapped_column(Float, nullable=False)  # 0-1
     information_density_score: Mapped[float] = mapped_column(Float, nullable=False)  # 0-1
-    
+
     # Category-wise scores
     patient_info_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     medical_history_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     assessment_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     treatment_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    
+
     # Quality metrics
     questions_answered: Mapped[int] = mapped_column(Integer, nullable=False)
     questions_total: Mapped[int] = mapped_column(Integer, nullable=False)
     high_confidence_answers: Mapped[int] = mapped_column(Integer, nullable=False)
-    
+
     # Calculated metrics
     answers_requiring_review: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     transcription_quality_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    
+
     # Timestamps for caching
     scores_calculated_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=lambda: datetime.now(),
         nullable=False
     )
+
+
+class RealTimeSession(Base):
+    """Model for storing real-time WebSocket transcription sessions."""
+
+    __tablename__ = "realtime_sessions"
+
+    # Session info
+    session_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    client_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Session status
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="active",  # active, paused, completed, terminated
+        nullable=False,
+    )
+
+    # Audio configuration
+    sample_rate: Mapped[int] = mapped_column(Integer, default=16000, nullable=False)
+    channels: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    chunk_duration: Mapped[float] = mapped_column(
+        Float, default=2.0, nullable=False
+    )  # seconds
+
+    # Processing settings
+    whisper_model: Mapped[str] = mapped_column(
+        String(50), default="base", nullable=False
+    )
+    language: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+
+    # Session metrics
+    total_audio_duration: Mapped[float] = mapped_column(
+        Float, default=0.0, nullable=False
+    )
+    chunks_processed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # Full conversation data
+    full_transcript: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    final_segments: Mapped[dict] = mapped_column(JSON, default=list, nullable=False)
+
+    # Connection info
+    connected_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    last_activity_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    disconnected_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # Relationships
+    transcript_chunks: Mapped[List["RealTimeTranscriptChunk"]] = relationship(
+        "RealTimeTranscriptChunk",
+        back_populates="session",
+        cascade="all, delete-orphan",
+    )
+
+
+class RealTimeTranscriptChunk(Base):
+    """Model for storing individual real-time transcript chunks."""
+
+    __tablename__ = "realtime_transcript_chunks"
+
+    # Foreign key
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("realtime_sessions.id"), nullable=False
+    )
+
+    # Chunk info
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_time: Mapped[float] = mapped_column(
+        Float, nullable=False
+    )  # seconds from session start
+    end_time: Mapped[float] = mapped_column(Float, nullable=False)
+
+    # Transcript data
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Processing info
+    model_used: Mapped[str] = mapped_column(String(50), nullable=False)
+    processing_time_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Audio chunk metadata
+    audio_duration: Mapped[float] = mapped_column(Float, nullable=False)
+    audio_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Status
+    is_final: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_corrected: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Relationship
+    session: Mapped["RealTimeSession"] = relationship(
+        "RealTimeSession", back_populates="transcript_chunks"
+    )
+
+
+class RealTimeSessionMetrics(Base):
+    """Model for storing performance metrics of real-time sessions."""
+
+    __tablename__ = "realtime_session_metrics"
+
+    # Foreign key
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("realtime_sessions.id"), nullable=False, unique=True
+    )
+
+    # Performance metrics
+    avg_processing_time_ms: Mapped[float] = mapped_column(Float, nullable=False)
+    max_processing_time_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    min_processing_time_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Audio quality metrics
+    avg_confidence_score: Mapped[float] = mapped_column(Float, nullable=False)
+    total_chunks: Mapped[int] = mapped_column(Integer, nullable=False)
+    successful_chunks: Mapped[int] = mapped_column(Integer, nullable=False)
+    failed_chunks: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Network metrics
+    avg_chunk_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_data_received_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    connection_drops: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # Real-time performance
+    real_time_factor: Mapped[float] = mapped_column(
+        Float, nullable=False
+    )  # processing_time / audio_duration
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Quality assessment
+    transcript_completeness: Mapped[float] = mapped_column(Float, nullable=False)  # 0-1
+    estimated_accuracy: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )  # 0-1
