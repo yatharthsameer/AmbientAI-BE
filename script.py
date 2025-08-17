@@ -1,52 +1,48 @@
-# Let me create a comprehensive scalable Python backend for nurse conversation processing
-# I'll structure this as a complete application with all the required components
+import requests
+from datasets import load_dataset
+import itertools
 
-# First, let's create the project structure and main files
-import os
-import json
+BASE_URL = "http://localhost:8000"
 
-# Project structure
-project_structure = {
-    "app/": {
-        "__init__.py": "",
-        "main.py": "# FastAPI main application",
-        "api/": {
-            "__init__.py": "",
-            "routes/": {
-                "__init__.py": "",
-                "transcription.py": "# API routes for transcription and Q&A",
-            }
-        },
-        "core/": {
-            "__init__.py": "",
-            "config.py": "# Configuration settings",
-            "database.py": "# Database configuration",
-            "celery_app.py": "# Celery configuration",
-        },
-        "models/": {
-            "__init__.py": "",
-            "database.py": "# SQLAlchemy models",
-            "schemas.py": "# Pydantic models",
-        },
-        "services/": {
-            "__init__.py": "",
-            "transcription.py": "# Transcription service using Whisper",
-            "qa_extraction.py": "# Q&A extraction using transformers",
-        },
-        "workers/": {
-            "__init__.py": "",
-            "tasks.py": "# Celery tasks",
-        },
-        "utils/": {
-            "__init__.py": "",
-            "helpers.py": "# Helper functions",
+
+def ingest_medquad(batch_size: int = 500):
+    """Ingest keivalya/MedQuad-MedicalQnADataset into RAG QA."""
+    ds = load_dataset("keivalya/MedQuad-MedicalQnADataset")
+
+    def row_to_pair(r):
+        q = r.get("question") or r.get("Question")
+        a = r.get("answer") or r.get("Answer")
+        if not q or not a:
+            return None
+        return {
+            "question": q.strip(),
+            "answer": a.strip(),
+            "specialty": r.get("specialty") or r.get("topic") or r.get("disease") or None,
+            "source": "MedQuAD",
         }
-    },
-    "requirements.txt": "# Python dependencies",
-    "docker-compose.yml": "# Docker setup for Redis and PostgreSQL",
-    "README.md": "# Documentation",
-    ".env.example": "# Environment variables example"
-}
 
-print("Project Structure:")
-print(json.dumps(project_structure, indent=2))
+    all_pairs = []
+    for split in ds:
+        for r in ds[split]:
+            p = row_to_pair(r)
+            if p:
+                all_pairs.append(p)
+
+    def chunks(iterable, size):
+        it = iter(iterable)
+        while True:
+            batch = list(itertools.islice(it, size))
+            if not batch:
+                break
+            yield batch
+
+    added = 0
+    for batch in chunks(all_pairs, batch_size):
+        resp = requests.post(f"{BASE_URL}/api/v1/rag/qa:ingest", json={"pairs": batch}, timeout=120)
+        resp.raise_for_status()
+        added += resp.json().get("added", 0)
+    print(f"Ingested {added} QA pairs from MedQuAD")
+
+
+if __name__ == "__main__":
+    ingest_medquad()

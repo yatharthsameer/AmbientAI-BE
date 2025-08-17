@@ -23,14 +23,23 @@ class DatabaseManager:
     """Database connection and session manager."""
     
     def __init__(self):
-        self._engine: Optional[AsyncEngine] = None
-        self._session_factory: Optional[async_sessionmaker[AsyncSession]] = None
+        self._engines: dict[int, AsyncEngine] = {}
+        self._session_factories: dict[int, async_sessionmaker[AsyncSession]] = {}
         self._settings = get_settings()
     
+    def _current_loop_id(self) -> int:
+        try:
+            loop = asyncio.get_running_loop()
+            return id(loop)
+        except RuntimeError:
+            # No running loop in this context
+            return 0
+
     def create_engine(self) -> AsyncEngine:
         """Create and configure the async database engine."""
-        if self._engine is not None:
-            return self._engine
+        loop_id = self._current_loop_id()
+        if loop_id in self._engines:
+            return self._engines[loop_id]
         
         db_settings = self._settings.database_settings
         
@@ -57,30 +66,31 @@ class DatabaseManager:
             engine_kwargs.pop("pool_size", None)
             engine_kwargs.pop("max_overflow", None)
         
-        self._engine = create_async_engine(
+        engine = create_async_engine(
             db_settings.url,
             **engine_kwargs
         )
-        
-        logger.info(f"Database engine created for: {db_settings.url.split('@')[-1] if '@' in db_settings.url else 'SQLite'}")
-        return self._engine
+        self._engines[loop_id] = engine
+        logger.info(f"Database engine created (loop={loop_id}) for: {db_settings.url.split('@')[-1] if '@' in db_settings.url else 'SQLite'}")
+        return engine
     
     def create_session_factory(self) -> async_sessionmaker[AsyncSession]:
         """Create the async session factory."""
-        if self._session_factory is not None:
-            return self._session_factory
-        
+        loop_id = self._current_loop_id()
+        if loop_id in self._session_factories:
+            return self._session_factories[loop_id]
+
         engine = self.create_engine()
-        self._session_factory = async_sessionmaker(
+        session_factory = async_sessionmaker(
             bind=engine,
             class_=AsyncSession,
             expire_on_commit=False,
             autoflush=True,
             autocommit=False
         )
-        
-        logger.info("Database session factory created")
-        return self._session_factory
+        self._session_factories[loop_id] = session_factory
+        logger.info(f"Database session factory created (loop={loop_id})")
+        return session_factory
     
     async def create_tables(self):
         """Create all database tables."""
@@ -97,6 +107,54 @@ class DatabaseManager:
                     await conn.exec_driver_sql("SELECT pg_advisory_unlock(1183372841)")
                 except Exception:
                     pass
+
+    async def apply_post_init_migrations(self):
+        """Apply idempotent DDL to add newly introduced columns without Alembic."""
+        try:
+            engine = self.create_engine()
+            async with engine.begin() as conn:
+                logger.info("Applying post-init migrations (safe, idempotent)...")
+                # Add processing_time_seconds to question_answers
+                await conn.exec_driver_sql(
+                    "ALTER TABLE IF EXISTS question_answers "
+                    "ADD COLUMN IF NOT EXISTS processing_time_seconds DOUBLE PRECISION"
+                )
+                # Users table is created by metadata; ensure submitted_by_user_id exists on feedback
+                await conn.exec_driver_sql(
+                    "ALTER TABLE IF EXISTS answer_feedback "
+                    "ADD COLUMN IF NOT EXISTS submitted_by_user_id UUID"
+                )
+                # Add password_hash to users
+                await conn.exec_driver_sql(
+                    "ALTER TABLE IF EXISTS users "
+                    "ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)"
+                )
+                # Add uploaded_by_user_id to conversation_uploads
+                await conn.exec_driver_sql(
+                    "ALTER TABLE IF EXISTS conversation_uploads "
+                    "ADD COLUMN IF NOT EXISTS uploaded_by_user_id UUID"
+                )
+                # Add FK constraints if missing (ignore if already present)
+                # Add FK if not already present (ignore errors)
+                try:
+                    await conn.exec_driver_sql(
+                        "ALTER TABLE answer_feedback "
+                        "ADD CONSTRAINT IF NOT EXISTS fk_answer_feedback_user "
+                        "FOREIGN KEY (submitted_by_user_id) REFERENCES users(id)"
+                    )
+                except Exception:
+                    pass
+                try:
+                    await conn.exec_driver_sql(
+                        "ALTER TABLE conversation_uploads "
+                        "ADD CONSTRAINT IF NOT EXISTS fk_uploads_user "
+                        "FOREIGN KEY (uploaded_by_user_id) REFERENCES users(id)"
+                    )
+                except Exception:
+                    pass
+                logger.info("Post-init migrations applied")
+        except Exception as e:
+            logger.warning(f"Post-init migrations skipped/failed: {e}")
     
     async def drop_tables(self):
         """Drop all database tables (use with caution!)."""
@@ -137,7 +195,13 @@ class DatabaseManager:
         """Close the database engine and all connections."""
         if self._engine:
             logger.info("Closing database connections...")
-            await self._engine.dispose()
+            for lp, eng in list(self._engines.items()):
+                try:
+                    await eng.dispose()
+                except Exception:
+                    pass
+                finally:
+                    self._engines.pop(lp, None)
             logger.info("Database connections closed")
     
     @property
@@ -172,6 +236,8 @@ async def init_database():
     # Verify connection
     if await db_manager.check_connection():
         logger.info("Database initialization completed successfully")
+        # Apply safe DDL for new columns
+        await db_manager.apply_post_init_migrations()
     else:
         logger.error("Database initialization failed - connection check failed")
         raise Exception("Database connection failed")

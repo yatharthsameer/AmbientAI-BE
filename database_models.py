@@ -30,6 +30,18 @@ class Base(AsyncAttrs, DeclarativeBase):
     )
 
 
+class User(Base):
+    """Simple user model for tracking actions."""
+    
+    __tablename__ = "users"
+    
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+
 class ConversationUpload(Base):
     """Model for storing conversation upload information."""
     
@@ -71,6 +83,9 @@ class ConversationUpload(Base):
         back_populates="upload",
         cascade="all, delete-orphan"
     )
+    # Who uploaded (optional)
+    uploaded_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    uploaded_by_user: Mapped[Optional["User"]] = relationship("User")
 
 
 class ConversationTranscription(Base):
@@ -134,6 +149,7 @@ class QuestionAnswer(Base):
     
     # Processing info
     model_used: Mapped[str] = mapped_column(String(100), nullable=False)
+    processing_time_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     
     # Status - whether answer was found or uncertain
     is_confident: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -143,6 +159,13 @@ class QuestionAnswer(Base):
     upload: Mapped["ConversationUpload"] = relationship(
         "ConversationUpload", 
         back_populates="qa_results"
+    )
+
+    # Feedback relationship
+    feedback: Mapped[List["AnswerFeedback"]] = relationship(
+        "AnswerFeedback",
+        back_populates="question_answer",
+        cascade="all, delete-orphan"
     )
 
 
@@ -224,3 +247,68 @@ class ConversationScore(Base):
         default=lambda: datetime.now(),
         nullable=False
     )
+
+
+class AnswerFeedback(Base):
+    """Feedback on extracted answers for continuous improvement."""
+    
+    __tablename__ = "answer_feedback"
+    
+    # Reference to the QA record
+    question_answer_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("question_answers.id"),
+        nullable=False
+    )
+    
+    # Feedback content
+    is_correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    corrected_answer: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    feedback_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    confidence_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    
+    # Meta
+    feedback_source: Mapped[str] = mapped_column(String(50), nullable=False, default="user")
+    feedback_timestamp: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now())
+    
+    # Who submitted the feedback (optional)
+    submitted_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    submitted_by_user: Mapped[Optional["User"]] = relationship("User")
+
+    # Relationship back to QA
+    question_answer: Mapped["QuestionAnswer"] = relationship(
+        "QuestionAnswer",
+        back_populates="feedback"
+    )
+
+
+class RAGGuideline(Base):
+    """Persisted guideline for RAG retrieval."""
+    
+    __tablename__ = "rag_guidelines"
+    
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(50), nullable=False, default="guideline")
+    specialty: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    keywords: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
+    medical_terms: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
+    
+    created_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_by_user: Mapped[Optional["User"]] = relationship("User")
+
+
+class RAGQAPair(Base):
+    """Persisted QA pair used as RAG knowledge."""
+    
+    __tablename__ = "rag_qa_pairs"
+    
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    specialty: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    keywords: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
+    medical_terms: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
+    
+    created_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_by_user: Mapped[Optional["User"]] = relationship("User")

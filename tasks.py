@@ -19,6 +19,8 @@ from datetime import timedelta
 
 from celery_app import celery_app, CallbackTask, get_retry_kwargs
 from database import db_manager
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
 from config import get_settings, PREDEFINED_QUESTIONS
 from database_models import (
     ConversationUpload, 
@@ -33,14 +35,18 @@ from schemas import ProcessingStatus, JobStatus
 
 
 def run_async(coro):
-    """Helper function to run async code in Celery tasks."""
+    """Run async coroutine in a fresh event loop to avoid cross-loop issues."""
+    loop = asyncio.new_event_loop()
     try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-    
-    return loop.run_until_complete(coro)
+        return loop.run_until_complete(coro)
+    finally:
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        asyncio.set_event_loop(None)
+        loop.close()
 
 
 # Get settings
@@ -238,6 +244,7 @@ def extract_qa_answers(
                         timestamp_end=answer_data.get("timestamp_end"),
                         context_snippet=answer_data.get("context_snippet"),
                         model_used=answer_data.get("model_used", "unknown"),
+                        processing_time_seconds=answer_data.get("processing_time_seconds"),
                         is_confident=answer_data["is_confident"],
                         is_manual_review_required=not answer_data["is_confident"]
                     )
@@ -246,6 +253,7 @@ def extract_qa_answers(
                     saved_answers.append(qa_record)
                 
                 await session.commit()
+                # Attach RAG and processing metadata via in-memory echo (not persisted fields)
                 return saved_answers
         
         saved_answers = run_async(save_answers())
@@ -509,9 +517,7 @@ def process_text_only(self, upload_id: str, text: str, custom_questions: List[Di
         transcription_service = TranscriptionService()
         transcription_result = transcription_service.transcribe_text_only(text)
         
-        # Save transcription using sync database operations
-        import asyncio
-        
+        # Save transcription using helper that binds to the Celery process loop
         async def save_transcription():
             async with db_manager.get_session() as session:
                 transcription = ConversationTranscription(
@@ -523,19 +529,11 @@ def process_text_only(self, upload_id: str, text: str, custom_questions: List[Di
                     processing_time_seconds=transcription_result["processing_time_seconds"],
                     confidence_score=transcription_result.get("confidence_score")
                 )
-                
                 session.add(transcription)
                 await session.commit()
                 return transcription
-        
-        # Get the current event loop or create a new one
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        
-        transcription = loop.run_until_complete(save_transcription())
+
+        transcription = run_async(save_transcription())
         
         self.update_progress(30, 100, "Extracting Q&A answers...")
         

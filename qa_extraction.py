@@ -20,6 +20,8 @@ from services.gemini_service import GeminiService
 from services.openai_service import OpenAIService
 from services.hybrid_extraction_service import HybridExtractionService
 from services.distilbert_service import DistilBERTService
+from services.rag_service import SimpleRAGService
+from services.final_verification_service import FinalVerificationService
 
 
 class QAExtractionService:
@@ -81,6 +83,22 @@ class QAExtractionService:
         
         # Traditional Q&A model
         self.qa_model = None # This line was removed from the new_code, so it's removed here.
+        
+        # Initialize lightweight RAG service (no external deps)
+        try:
+            self.simple_rag = SimpleRAGService()
+            self.logger.info("Simple RAG service initialized")
+        except Exception as e:
+            self.logger.warning(f"Simple RAG initialization failed: {e}")
+            self.simple_rag = None
+
+        # Final verification (second pass)
+        try:
+            self.final_verifier = FinalVerificationService()
+            self.logger.info("Final verification service initialized")
+        except Exception as e:
+            self.logger.warning(f"Final verification init failed: {e}")
+            self.final_verifier = None
     
     def _load_model(self, model_name: str = None) -> Tuple[Any, Any, QuestionAnsweringPipeline]:
         """Load the Q&A model, tokenizer, and create pipeline."""
@@ -662,6 +680,7 @@ class QAExtractionService:
             # Process the AI results to match the expected format
             extracted_info = result.get("extracted_info", {})
             processed_answers = []
+            verification_start = time.time()
             
             for question_data in questions:
                 question_id = question_data.get("id")
@@ -693,7 +712,7 @@ class QAExtractionService:
                         
                         # Recalculate confidence if not provided or if it seems wrong
                         if confidence_score == 0.0 or confidence_score == 0.8:
-                            confidence_score = self._calculate_answer_confidence(answer_text, question_text)
+                            confidence_score = self._calculate_answer_confidence(answer_text, question_text, context)
                         
                         # Determine if manual review is needed
                         needs_review = self._needs_manual_review(answer_text, question_text, confidence_score)
@@ -702,7 +721,7 @@ class QAExtractionService:
                         # Simple string response
                         answer_text = str(answer_data)
                         # Calculate confidence based on answer quality
-                        confidence_score = self._calculate_answer_confidence(answer_text, question_text)
+                        confidence_score = self._calculate_answer_confidence(answer_text, question_text, context)
                         is_confident = confidence_score > 0.6
                         context_snippet = ""
                         timestamp_start = None
@@ -737,6 +756,22 @@ class QAExtractionService:
                     if snippet and not context_snippet:
                         context_snippet = snippet
                 
+                # RAG metadata enrichment (non-destructive)
+                rag_guidelines = []
+                rag_context = []
+                if getattr(self, "simple_rag", None):
+                    try:
+                        rag_meta = self.simple_rag.enhance_answer(
+                            base_answer=answer_text,
+                            question=question_text,
+                            conversation_text=context,
+                            top_k=2,
+                        )
+                        rag_guidelines = rag_meta.get("guidelines_applied", [])
+                        rag_context = rag_meta.get("rag_context", [])
+                    except Exception as e:
+                        logger.warning(f"RAG enhancement failed for {question_id}: {e}")
+                
                 # Create answer result
                 answer_result = {
                     "question_id": question_id,
@@ -748,15 +783,37 @@ class QAExtractionService:
                     "context_snippet": context_snippet,
                     "timestamp_start": timestamp_start,
                     "timestamp_end": timestamp_end,
-                    "model_used": model_used
+                    "model_used": model_used,
+                    "rag_guidelines": rag_guidelines,
+                    "rag_context": rag_context
                 }
                 
                 processed_answers.append(answer_result)
+            
+            # Optional second-pass verification to improve accuracy
+            verification_time = 0.0
+            if self.final_verifier and isinstance(extracted_info, dict):
+                try:
+                    # Build a compact dict {question_id: answer}
+                    compact = {a["question_id"]: a["answer"] for a in processed_answers}
+                    verified = self.final_verifier.verify_and_clean_results(
+                        compact, context, questions
+                    )
+                    # Apply verified answers back
+                    for a in processed_answers:
+                        if a["question_id"] in verified:
+                            a["answer"] = verified[a["question_id"]]
+                finally:
+                    verification_time = time.time() - verification_start
             
             processing_time = time.time() - start_time
             logger.info(f"Completed Q&A extraction in {processing_time:.2f} seconds")
             logger.info(f"Extracted {len([a for a in processed_answers if a['answer'] != 'Information not available in conversation'])} answers")
             
+            for ans in processed_answers:
+                ans["processing_time_seconds"] = round(processing_time, 3)
+                if verification_time:
+                    ans["verification_time_seconds"] = round(verification_time, 3)
             return processed_answers
             
         except Exception as e:
@@ -842,7 +899,7 @@ class QAExtractionService:
         
         return True, ""
 
-    def _calculate_answer_confidence(self, answer_text: str, question: str) -> float:
+    def _calculate_answer_confidence(self, answer_text: str, question: str, context: str | None = None) -> float:
         """
         Calculate confidence score based on answer quality and relevance.
         
@@ -858,16 +915,63 @@ class QAExtractionService:
         
         # Base confidence
         confidence = 0.5
+
+        answer_lower = answer_text.lower()
+        question_lower = question.lower()
+
+        # Boost if the exact answer text appears in context
+        if context:
+            try:
+                ctx_lower = context.lower()
+                if answer_lower and answer_lower in ctx_lower:
+                    confidence += 0.25
+                else:
+                    # Token overlap boost
+                    ans_tokens = [t for t in answer_lower.replace(',', ' ').split() if len(t) > 1]
+                    if ans_tokens:
+                        overlap = sum(1 for t in ans_tokens if t in ctx_lower)
+                        ratio = overlap / max(1, len(ans_tokens))
+                        if ratio >= 0.6:
+                            confidence += 0.15
+            except Exception:
+                pass
         
         # Boost for specific, factual answers
-        if any(word in answer_text.lower() for word in ['mg', 'ml', '°f', '°c', 'mmhg', 'mg/dl']):
+        if any(word in answer_lower for word in ['mg', 'ml', '°f', '°c', 'mmhg', 'mg/dl']):
             confidence += 0.2  # Medical measurements
         
-        if any(word in answer_text.lower() for word in ['yes', 'no', 'true', 'false']):
+        if any(word in answer_lower for word in ['yes', 'no', 'true', 'false']):
             confidence += 0.1  # Clear yes/no answers
         
-        if any(word in answer_text.lower() for word in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']):
+        if any(word in answer_lower for word in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']):
             confidence += 0.15  # Numeric answers
+
+        # Category/intent specific boosts inferred from the question
+        # Patient name detection: two capitalized words
+        if 'name' in question_lower:
+            parts = [p for p in answer_text.split() if p]
+            if len(parts) >= 2 and all(p[:1].isupper() for p in parts[:2]):
+                confidence += 0.25
+
+        # Follow-up day detection
+        if 'follow' in question_lower or 'when' in question_lower:
+            days = {"monday","tuesday","wednesday","thursday","friday","saturday","sunday"}
+            if any(d in answer_lower for d in days):
+                confidence += 0.2
+
+        # Allergies
+        if 'allerg' in question_lower and any(k in answer_lower for k in ['penicillin','allergy','rash','swelling']):
+            confidence += 0.2
+
+        # Vital signs
+        if 'vital' in question_lower or 'blood pressure' in question_lower or 'bp' in question_lower:
+            if any(k in answer_lower for k in ['bp','blood pressure','pulse','resp','oxygen','temp','mmhg','°f','°c']) and any(ch.isdigit() for ch in answer_lower):
+                confidence += 0.25
+
+        # Medications list / dosing
+        if 'medication' in question_lower:
+            if any(u in answer_lower for u in ['mg','ml']) or ',' in answer_text or any(ch.isdigit() for ch in answer_lower):
+                confidence += 0.25
         
         # Penalty for generic or unclear answers
         if len(answer_text) < 3:
@@ -880,9 +984,6 @@ class QAExtractionService:
             confidence -= 0.5  # No information found
         
         # Penalty for answers that seem to answer different questions
-        question_lower = question.lower()
-        answer_lower = answer_text.lower()
-        
         if 'age' in question_lower and any(word in answer_lower for word in ['cancer', 'diagnosis', 'treatment']):
             confidence -= 0.6  # Wrong type of answer
         

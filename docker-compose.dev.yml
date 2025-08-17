@@ -32,6 +32,14 @@ services:
       - ./uploads:/app/uploads
       - ./logs:/app/logs
     environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@ambientai_be_postgres:5432/nurse_conversations
+      - REDIS_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_BROKER_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://ambientai_be_redis:6379/0
+      - UPLOAD_DIR=/app/uploads
+      - WHISPER_MODEL=base
+      - WHISPER_DEVICE=cpu
+      - SECRET_KEY=dev-secret-key
       - DEBUG=true
       - LOG_LEVEL=DEBUG
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
@@ -50,6 +58,14 @@ services:
       - ./uploads:/app/uploads
       - ./logs:/app/logs
     environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@ambientai_be_postgres:5432/nurse_conversations
+      - REDIS_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_BROKER_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://ambientai_be_redis:6379/0
+      - UPLOAD_DIR=/app/uploads
+      - WHISPER_MODEL=base
+      - WHISPER_DEVICE=cpu
+      - SECRET_KEY=dev-secret-key
       - DEBUG=true
       - LOG_LEVEL=DEBUG
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
@@ -64,15 +80,24 @@ services:
       - .:/app
       - ./logs:/app/logs
     environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@ambientai_be_postgres:5432/nurse_conversations
+      - REDIS_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_BROKER_URL=redis://ambientai_be_redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://ambientai_be_redis:6379/0
+      - SECRET_KEY=dev-secret-key
       - DEBUG=true
       - LOG_LEVEL=DEBUG
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    command: celery -A celery_app beat --loglevel=debug
 
   ambientai_be_flower:
     build:
       context: .
       dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
     environment:
       - FLOWER_DEBUG=true
       - FLOWER_LOGGING=DEBUG
@@ -83,6 +108,7 @@ services:
       - SECRET_KEY=dev-secret-key
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    command: sh -c "cd /app && python -m celery -A celery_app flower --port=5555"
 
   # Add a database admin interface for development
   adminer:

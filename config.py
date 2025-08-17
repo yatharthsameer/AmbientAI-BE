@@ -115,11 +115,36 @@ class Settings(BaseSettings):
     # ASR
     whisper_model: str = "base"
     whisper_device: str = "cpu"
+    whisper_beam_size: int = 5
+    whisper_language: str = "en"
+    whisper_task: str = "transcribe"
     
     # Q&A
     qa_model: str = "distilbert-base-cased-distilled-squad"
     max_question_length: int = 512
     max_context_length: int = 4096
+    confidence_threshold: float = 0.6
+    
+    # Hybrid Extraction
+    enable_hybrid_extraction: bool = True
+    enable_final_verification: bool = True
+    
+    # DistilBERT
+    distilbert_model: str = "distilbert-base-cased-distilled-squad"
+    distilbert_device: str = "auto"
+    distilbert_max_length: int = 512
+    
+    # Verification
+    verification_max_answer_length: int = 200
+    verification_min_answer_length: int = 3
+    
+    # Context
+    enable_temporal_context: bool = True
+    enable_unit_extraction: bool = True
+    
+    # Quality
+    quality_score_threshold: float = 0.7
+    manual_review_threshold: float = 0.4
     
     # AI Services
     gemini_api_key: str = ""
@@ -128,6 +153,20 @@ class Settings(BaseSettings):
     # Security
     secret_key: str
     access_token_expire_minutes: int = 30
+    jwt_algorithm: str = "HS256"
+    
+    # CORS
+    allowed_origins: str = '["http://localhost:3000", "https://yourdomain.com"]'
+    
+    # Rate Limiting
+    rate_limit_per_minute: int = 100
+    rate_limit_per_hour: int = 1000
+    
+    # Logging
+    log_format: str = "json"
+    log_file: str = "./logs/app.log"
+    log_max_size: str = "100MB"
+    log_backup_count: int = 5
     
     class Config:
         env_file = ".env"

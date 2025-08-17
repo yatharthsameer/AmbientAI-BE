@@ -348,13 +348,44 @@ For detailed architecture diagrams and technical specifications, see [ARCHITECTU
 | `GET` | `/api/v1/uploads` | List all uploads with pagination |
 | `POST` | `/api/v1/tasks/{task_id}/cancel` | Cancel a running task |
 
-### Utility Endpoints
+### RAG Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v1/rag/guidelines` | List in-memory guidelines (optional `specialty` filter) |
+| `POST` | `/api/v1/rag/guidelines:ingest` | Ingest guideline items into DB + memory |
+| `POST` | `/api/v1/rag/qa:ingest` | Ingest Q&A pairs as retrievable items |
+
+### Auth & Users
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/users` | Create a user account |
+| `POST` | `/api/v1/auth/login` | Login and receive `access_token` |
+| `GET` | `/api/v1/users/me/uploads` | List your uploads (requires `access_token`) |
+
+Note: authentication-sensitive endpoints accept `access_token` as a query parameter, e.g. `...?access_token=TOKEN`.
+
+### Admin Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v1/admin/stats` | System statistics overview |
+| `GET` | `/api/v1/admin/users` | List users (admin) |
+| `GET` | `/api/v1/admin/tasks/pending` | Pending tasks and queue lengths (admin) |
+
+### Feedback
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/feedback/collect` | Submit feedback for a Q&A item |
+
+### Utility & Docs
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/health` | System health check |
 | `GET` | `/api/v1/questions` | Get predefined questions |
-| `GET` | `/api/v1/admin/stats` | System statistics (admin) |
 | `GET` | `/docs` | Interactive API documentation |
 | `GET` | `/redoc` | Alternative API documentation |
 
@@ -362,7 +393,7 @@ For detailed architecture diagrams and technical specifications, see [ARCHITECTU
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/v1/test/gemini` | Test Gemini API integration |
+| `POST` | `/api/v1/test/gemini` | Test Gemini/OpenAI API integration |
 | `POST` | `/api/v1/test/medical-extraction` | Test medical info extraction |
 
 ## 🧠 AI Services & Models

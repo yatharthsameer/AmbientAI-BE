@@ -28,15 +28,18 @@ from schemas import (
     ConversationTranscriptionResponse,
     QuestionAnswerResponse,
 )
-from database_models import ConversationUpload, ConversationTranscription, QuestionAnswer
+from database_models import ConversationUpload, ConversationTranscription, QuestionAnswer, AnswerFeedback, User, RAGGuideline, RAGQAPair
 from transcription import TranscriptionService
 from qa_extraction import QAExtractionService
 from tasks import process_conversation_complete, process_text_only
 from helpers import save_upload_file, get_file_duration
+from services.rag_service import SimpleRAGService
 from services.qa_service import QAService, AIProvider
 
 # Request models for test endpoints
 from pydantic import BaseModel
+from jose import JWTError, jwt
+from passlib.context import CryptContext
 
 class GeminiTestRequest(BaseModel):
     prompt: str
@@ -47,8 +50,54 @@ class MedicalExtractionRequest(BaseModel):
     provider: AIProvider = AIProvider.GEMINI
 
 
+class FeedbackRequest(BaseModel):
+    question_answer_id: str
+    is_correct: bool
+    corrected_answer: Optional[str] = None
+    feedback_notes: Optional[str] = None
+    confidence_rating: Optional[int] = None
+    feedback_source: str = "user"
+    user_id: Optional[str] = None
+
+# Lightweight RAG service instance
+rag_service = SimpleRAGService()
+
+
 # Initialize settings
 settings = get_settings()
+# Auth utils
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(password: str, password_hash: str) -> bool:
+    try:
+        return pwd_context.verify(password, password_hash)
+    except Exception:
+        return False
+
+def create_access_token(data: dict, expires_minutes: Optional[int] = None) -> str:
+    to_encode = data.copy()
+    expire_min = expires_minutes if expires_minutes is not None else settings.access_token_expire_minutes
+    from datetime import datetime, timedelta, timezone
+    expire = datetime.now(timezone.utc) + timedelta(minutes=expire_min)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, settings.secret_key, algorithm=settings.jwt_algorithm)
+
+async def get_current_user(token: str = Query(None, alias="access_token"), db: AsyncSession = Depends(get_database_session)) -> Optional[User]:
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
+        user_id: Optional[str] = payload.get("sub")
+        if not user_id:
+            return None
+        from sqlalchemy import select
+        user = await db.scalar(select(User).where(User.id == uuid.UUID(user_id)))
+        return user
+    except JWTError:
+        return None
 
 # Configure logging
 logger.remove()
@@ -78,7 +127,10 @@ async def lifespan(app: FastAPI):
         logger.info("Database initialized successfully")
         
         # Test Celery connection
-        celery_app.control.ping(timeout=5)
+        try:
+            celery_app.control.ping(timeout=5)
+        except Exception:
+            logger.warning("Celery not reachable during startup check; continuing")
         logger.info("Celery connection established")
         
     except Exception as e:
@@ -118,6 +170,273 @@ app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=["*"]  # Configure appropriately for production
 )
+
+# Lightweight RAG endpoints
+@app.get("/api/v1/rag/guidelines", response_model=dict)
+async def list_rag_guidelines(specialty: Optional[str] = None):
+    """List available built-in RAG guidelines (lightweight)."""
+    try:
+        items = rag_service.get_guidelines(specialty)
+        return {"guidelines": items, "count": len(items)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class IngestGuidelinesRequest(BaseModel):
+    guidelines: List[dict]
+
+
+class IngestQAPairsRequest(BaseModel):
+    pairs: List[dict]
+
+
+@app.post("/api/v1/rag/guidelines:ingest", response_model=dict)
+async def ingest_rag_guidelines(req: IngestGuidelinesRequest, db: AsyncSession = Depends(get_database_session), user_id: Optional[str] = None):
+    try:
+        # Persist
+        persisted = 0
+        for g in (req.guidelines or []):
+            if not g.get("title") or not g.get("content"):
+                continue
+            rec = RAGGuideline(
+                title=g["title"],
+                content=g["content"],
+                content_type=g.get("content_type") or "guideline",
+                specialty=g.get("specialty"),
+                source=g.get("source"),
+                keywords=g.get("keywords"),
+                medical_terms=g.get("medical_terms"),
+                created_by_user_id=(uuid.UUID(user_id) if user_id else None),
+            )
+            db.add(rec)
+            persisted += 1
+        await db.commit()
+
+        # Load into memory
+        added = rag_service.add_guidelines(req.guidelines)
+        return {"success": True, "added": added, "persisted": persisted}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/v1/rag/qa:ingest", response_model=dict)
+async def ingest_rag_qa_pairs(req: IngestQAPairsRequest, db: AsyncSession = Depends(get_database_session), user_id: Optional[str] = None):
+    try:
+        # Persist
+        persisted = 0
+        for p in (req.pairs or []):
+            if not p.get("question") or not p.get("answer"):
+                continue
+            rec = RAGQAPair(
+                question=p["question"],
+                answer=p["answer"],
+                specialty=p.get("specialty"),
+                source=p.get("source"),
+                keywords=p.get("keywords"),
+                medical_terms=p.get("medical_terms"),
+                created_by_user_id=(uuid.UUID(user_id) if user_id else None),
+            )
+            db.add(rec)
+            persisted += 1
+        await db.commit()
+
+        # Load into memory
+        added = rag_service.add_qa_pairs(req.pairs)
+        return {"success": True, "added": added, "persisted": persisted}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# User management endpoints
+class CreateUserRequest(BaseModel):
+    email: str
+    name: str
+    role: Optional[str] = None
+    password: str
+
+
+class UpdateUserRequest(BaseModel):
+    email: Optional[str] = None
+    name: Optional[str] = None
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+@app.post("/api/v1/users", response_model=dict)
+async def create_user(req: CreateUserRequest, db: AsyncSession = Depends(get_database_session)):
+    try:
+        # Ensure unique email
+        from sqlalchemy import select
+        existing = await db.scalar(select(User).where(User.email == req.email))
+        if existing:
+            raise HTTPException(status_code=409, detail="Email already exists")
+        
+        # Create user
+        user = User(
+            email=req.email,
+            name=req.name,
+            role=req.role or "user",
+            password_hash=hash_password(req.password)
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        return {"id": str(user.id), "email": user.email, "name": user.name, "role": user.role, "is_active": user.is_active}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/api/v1/auth/login", response_model=dict)
+async def login(req: LoginRequest, db: AsyncSession = Depends(get_database_session)):
+    try:
+        from sqlalchemy import select
+        user = await db.scalar(select(User).where(User.email == req.email))
+        if not user or not user.password_hash or not verify_password(req.password, user.password_hash):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        token = create_access_token({"sub": str(user.id)})
+        return {"access_token": token, "token_type": "bearer", "user": {"id": str(user.id), "email": user.email, "name": user.name, "role": user.role}}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def require_current_user(user: Optional[User] = Depends(get_current_user)) -> User:
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return user
+
+def require_admin_user(user: User = Depends(require_current_user)) -> User:
+    if (user.role or "").lower() != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    return user
+
+
+@app.get("/api/v1/users/me/uploads", response_model=dict)
+async def list_my_uploads(
+    page: int = 1,
+    size: int = 20,
+    status: Optional[str] = None,
+    db: AsyncSession = Depends(get_database_session),
+    current_user: User = Depends(require_current_user),
+):
+    try:
+        from sqlalchemy import select, func
+        # Count total
+        count_stmt = select(func.count(ConversationUpload.id)).where(
+            ConversationUpload.uploaded_by_user_id == current_user.id
+        )
+        if status:
+            count_stmt = count_stmt.where(ConversationUpload.status == status)
+        total = await db.scalar(count_stmt)
+
+        # Query paginated
+        offset = (page - 1) * size
+        query = select(ConversationUpload).where(
+            ConversationUpload.uploaded_by_user_id == current_user.id
+        )
+        if status:
+            query = query.where(ConversationUpload.status == status)
+        query = query.order_by(ConversationUpload.created_at.desc()).offset(offset).limit(size)
+
+        uploads = await db.scalars(query)
+        items = [ConversationUploadResponse.model_validate(u) for u in uploads]
+        return {
+            "items": items,
+            "total": int(total or 0),
+            "page": page,
+            "size": size,
+            "pages": ((int(total or 0) + size - 1) // size),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Admin: list all users
+@app.get("/api/v1/admin/users", response_model=dict)
+async def admin_list_users(
+    page: int = 1,
+    size: int = 20,
+    db: AsyncSession = Depends(get_database_session),
+    _: User = Depends(require_admin_user),
+):
+    try:
+        from sqlalchemy import select, func
+        total = await db.scalar(select(func.count(User.id)))
+        offset = (page - 1) * size
+        users = await db.scalars(
+            select(User).offset(offset).limit(size).order_by(User.created_at.desc())
+        )
+        items = [
+            {
+                "id": str(u.id),
+                "email": u.email,
+                "name": u.name,
+                "role": u.role,
+                "is_active": u.is_active,
+                "created_at": u.created_at,
+            }
+            for u in users
+        ]
+        return {
+            "items": items,
+            "total": int(total or 0),
+            "page": page,
+            "size": size,
+            "pages": ((int(total or 0) + size - 1) // size),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Admin: view remaining (pending) tasks and queue lengths
+@app.get("/api/v1/admin/tasks/pending", response_model=dict)
+async def admin_pending_tasks(
+    _: User = Depends(require_admin_user),
+):
+    try:
+        # Queue lengths from Redis (approximate pending tasks per queue)
+        from celery_app import get_queue_lengths
+        queue_lengths = get_queue_lengths()
+
+        # Celery inspect for active/reserved/scheduled (by worker)
+        pending_details = {
+            "active": {},
+            "reserved": {},
+            "scheduled": {},
+        }
+        try:
+            insp = celery_app.control.inspect(timeout=3)
+            pending_details["active"] = insp.active() or {}
+            pending_details["reserved"] = insp.reserved() or {}
+            pending_details["scheduled"] = insp.scheduled() or {}
+        except Exception:
+            pass
+
+        total_pending = sum(int(v or 0) for v in queue_lengths.values())
+        return {
+            "queue_lengths": queue_lengths,
+            "total_pending": total_pending,
+            "details": pending_details,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+
+
 
 
 # Error handlers
@@ -194,6 +513,7 @@ async def upload_conversation(
     file: UploadFile = File(...),
     process_immediately: bool = True,
     db: AsyncSession = Depends(get_database_session),
+    current_user: Optional[User] = Depends(get_current_user),
     background_tasks: BackgroundTasks = None
 ):
     """Upload an audio file for processing."""
@@ -231,7 +551,8 @@ async def upload_conversation(
             file_size=file.size or 0,
             content_type=file.content_type or "audio/unknown",
             duration_seconds=duration,
-            status="pending"
+            status="pending",
+            uploaded_by_user_id=(current_user.id if current_user else None)
         )
         
         db.add(upload)
@@ -257,7 +578,8 @@ async def upload_conversation(
 @app.post("/api/v1/text-processing", response_model=dict)
 async def process_text_only_endpoint(
     request: TextOnlyProcessingRequest,
-    db: AsyncSession = Depends(get_database_session)
+    db: AsyncSession = Depends(get_database_session),
+    current_user: Optional[User] = Depends(get_current_user)
 ):
     """Process text-only input without audio file."""
     try:
@@ -268,7 +590,8 @@ async def process_text_only_endpoint(
             file_size=len(request.text.encode('utf-8')),
             content_type="text/plain",
             duration_seconds=0,
-            status="pending"
+            status="pending",
+            uploaded_by_user_id=(current_user.id if current_user else None)
         )
         
         db.add(upload)
@@ -296,7 +619,8 @@ async def process_text_only_endpoint(
 @app.get("/api/v1/uploads/{upload_id}", response_model=CompleteConversationResponse)
 async def get_upload_results(
     upload_id: str,
-    db: AsyncSession = Depends(get_database_session)
+    db: AsyncSession = Depends(get_database_session),
+    current_user: Optional[User] = Depends(get_current_user)
 ):
     """Get complete results for an upload."""
     try:
@@ -330,7 +654,21 @@ async def get_upload_results(
         # Get Q&A results
         qa_results = []
         for qa in upload.qa_results:
-            qa_results.append(QuestionAnswerResponse.model_validate(qa))
+            item = QuestionAnswerResponse.model_validate(qa).model_dump()
+            # Enrich with RAG context on-the-fly (non-persistent)
+            try:
+                if rag_service:
+                    ctx = rag_service.enhance_answer(
+                        base_answer=item.get("answer_text"),
+                        question=item.get("question_text"),
+                        conversation_text=upload.transcription.full_text if upload.transcription else "",
+                        top_k=2,
+                    )
+                    item["rag_guidelines"] = ctx.get("guidelines_applied", [])
+                    item["rag_context"] = ctx.get("rag_context", [])
+            except Exception:
+                pass
+            qa_results.append(item)
         
         # Get score if available
         score = None
@@ -420,6 +758,44 @@ async def get_predefined_questions():
         questions=PREDEFINED_QUESTIONS
     )
 
+
+# Feedback collection endpoint
+@app.post("/api/v1/feedback/collect", response_model=dict)
+async def collect_feedback(req: FeedbackRequest, db: AsyncSession = Depends(get_database_session)):
+    try:
+        # Validate question_answer_id
+        try:
+            qa_id = uuid.UUID(req.question_answer_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid question_answer_id")
+        
+        # Check if question_answer exists
+        from sqlalchemy import select
+        qa = await db.scalar(select(QuestionAnswer).where(QuestionAnswer.id == qa_id))
+        if not qa:
+            raise HTTPException(status_code=404, detail="Question-answer pair not found")
+        
+        # Create feedback record
+        feedback = AnswerFeedback(
+            question_answer_id=qa_id,
+            is_correct=req.is_correct,
+            corrected_answer=req.corrected_answer,
+            feedback_notes=req.feedback_notes,
+            confidence_rating=req.confidence_rating,
+            feedback_source=req.feedback_source,
+            submitted_by_user_id=(uuid.UUID(req.user_id) if req.user_id else None)
+        )
+        
+        db.add(feedback)
+        await db.commit()
+        await db.refresh(feedback)
+        
+        return {"success": True, "feedback_id": str(feedback.id)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
 
 # List uploads with pagination
 @app.get("/api/v1/uploads", response_model=dict)

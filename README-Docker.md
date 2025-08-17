@@ -441,6 +441,102 @@ curl "http://localhost:8000/api/v1/uploads/{upload_id}"
 curl "http://localhost:8000/api/v1/tasks/{task_id}"
 ```
 
+### RAG Endpoints
+
+- List built-in guidelines (optional `specialty` filter):
+```bash
+curl "http://localhost:8000/api/v1/rag/guidelines?specialty=cardiology"
+```
+
+- Ingest guidelines into DB + in-memory catalog:
+```bash
+curl -X POST "http://localhost:8000/api/v1/rag/guidelines:ingest" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "guidelines": [
+      {"title": "Hypertension Basics", "content": "Target BP < 130/80 in diabetics.", "specialty": "cardiology"}
+    ]
+  }'
+```
+
+- Ingest Q&A pairs:
+```bash
+curl -X POST "http://localhost:8000/api/v1/rag/qa:ingest" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "pairs": [
+      {"question": "What is ACS?", "answer": "Acute Coronary Syndrome.", "specialty": "cardiology"}
+    ]
+  }'
+```
+
+### Auth & Users
+
+- Create user:
+```bash
+curl -X POST "http://localhost:8000/api/v1/users" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "demo@example.com",
+    "name": "Demo User",
+    "password": "demo1234",
+    "role": "admin"
+  }'
+```
+
+- Login (returns `access_token`):
+```bash
+curl -X POST "http://localhost:8000/api/v1/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"demo@example.com","password":"demo1234"}'
+```
+
+- List my uploads (pass token as query):
+```bash
+curl "http://localhost:8000/api/v1/users/me/uploads?access_token=YOUR_TOKEN"
+```
+
+### Feedback
+
+Submit feedback for a Q&A result:
+```bash
+curl -X POST "http://localhost:8000/api/v1/feedback/collect" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question_answer_id": "<qa_uuid>",
+    "is_correct": false,
+    "corrected_answer": "Metformin and Lisinopril",
+    "feedback_notes": "AI missed Lisinopril spelling",
+    "confidence_rating": 3
+  }'
+```
+
+### Admin (requires admin `access_token`)
+
+```bash
+# System statistics
+curl "http://localhost:8000/api/v1/admin/stats?access_token=ADMIN_TOKEN"
+
+# List users
+curl "http://localhost:8000/api/v1/admin/users?page=1&size=20&access_token=ADMIN_TOKEN"
+
+# Pending tasks and queue lengths
+curl "http://localhost:8000/api/v1/admin/tasks/pending?access_token=ADMIN_TOKEN"
+```
+
+### Test Endpoints
+```bash
+# Test Gemini/OpenAI integration
+curl -X POST "http://localhost:8000/api/v1/test/gemini" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Say hello","provider":"GEMINI"}'
+
+# Test medical extraction
+curl -X POST "http://localhost:8000/api/v1/test/medical-extraction" \
+  -H "Content-Type: application/json" \
+  -d '{"conversation_text":"Patient has chest pain...","provider":"GEMINI"}'
+```
+
 ### Response Format
 ```json
 {
