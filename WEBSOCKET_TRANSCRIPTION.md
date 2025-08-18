@@ -70,8 +70,8 @@ sequenceDiagram
 
 1. **Audio Reception**: Raw PCM 16-bit audio at 16kHz, mono
 2. **Buffering**: Accumulate audio chunks with configurable overlap
-3. **Chunk Processing**: Process when buffer reaches minimum size (2 seconds default)
-4. **Transcription**: Use Whisper (base model for speed) for real-time processing
+3. **Chunk Processing**: Process when buffer reaches minimum size (40 seconds for better context)
+4. **Transcription**: Use Whisper (small model for accuracy) with large chunks for better context
 5. **Response**: Send immediate transcript back to client
 6. **Storage**: Save chunks and metrics to database
 
@@ -90,19 +90,21 @@ sequenceDiagram
 # WebSocket Settings
 WEBSOCKET_MAX_CONNECTIONS=100           # Maximum concurrent connections
 WEBSOCKET_HEARTBEAT_INTERVAL=30         # Heartbeat interval (seconds)
-WEBSOCKET_CHUNK_TIMEOUT=10              # Chunk processing timeout
+WEBSOCKET_CHUNK_TIMEOUT=60              # Chunk processing timeout (increased for large chunks)
 WEBSOCKET_MAX_SESSION_DURATION=7200     # Maximum session duration (2 hours)
-WEBSOCKET_AUDIO_BUFFER_SIZE=8192        # Audio buffer size (bytes)
+WEBSOCKET_AUDIO_BUFFER_SIZE=1280000     # Audio buffer size (bytes) - Large buffer for 40s chunks
 WEBSOCKET_SAMPLE_RATE=16000             # Audio sample rate (Hz)
 WEBSOCKET_CHANNELS=1                    # Audio channels (mono)
-WEBSOCKET_CHUNK_DURATION=2.0            # Processing chunk duration (seconds)
-WEBSOCKET_OVERLAP_DURATION=0.5          # Overlap between chunks (seconds)
-WEBSOCKET_WHISPER_MODEL=base            # Whisper model for real-time processing
+WEBSOCKET_CHUNK_DURATION=40.0           # Processing chunk duration (seconds) - Large chunks for better context
+WEBSOCKET_OVERLAP_DURATION=2.0          # Overlap between chunks (seconds)
+WEBSOCKET_WHISPER_MODEL=small           # Whisper model for better accuracy with large chunks
 ```
 
 ### Performance Tuning
 
-- **Chunk Duration**: Shorter = lower latency, higher CPU usage
+- **Chunk Duration**: 40 seconds provides optimal balance of accuracy and processing efficiency
+  - **Benefits**: Better Whisper context, higher accuracy, fewer processing calls
+  - **Trade-offs**: Slightly higher latency, but much better transcription quality
 - **Overlap Duration**: Prevents word cutting at chunk boundaries
 - **Whisper Model**: `tiny` for speed, `base` for balance, `small+` for accuracy
 - **Buffer Size**: Larger = more stable processing, higher memory usage

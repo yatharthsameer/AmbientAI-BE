@@ -92,14 +92,22 @@ class WebSocketSettings(BaseModel):
 
     max_connections: int = 100
     heartbeat_interval: int = 30  # seconds
-    chunk_timeout: int = 10  # seconds
+    chunk_timeout: int = 60  # seconds - Increased timeout for larger 40-second chunks
     max_session_duration: int = 7200  # 2 hours in seconds
-    audio_buffer_size: int = 8192  # bytes
+    audio_buffer_size: int = (
+        1280000  # bytes - Large buffer for 40-second chunks (40s * 16000Hz * 2 bytes)
+    )
     sample_rate: int = 16000
     channels: int = 1
-    chunk_duration: float = 3.0  # seconds - Longer chunks for better context
-    overlap_duration: float = 0.2  # seconds - Reduced overlap to minimize repetition
-    whisper_model_realtime: str = "base"  # Use smaller model for real-time
+    chunk_duration: float = (
+        40.0  # seconds - Large chunks for much better Whisper context
+    )
+    overlap_duration: float = (
+        2.0  # seconds - Longer overlap for better continuity with large chunks
+    )
+    whisper_model_realtime: str = (
+        "small"  # Use better model since we have larger chunks
+    )
 
 
 class Settings(BaseSettings):
@@ -147,14 +155,22 @@ class Settings(BaseSettings):
     # WebSocket Settings
     websocket_max_connections: int = 100
     websocket_heartbeat_interval: int = 30
-    websocket_chunk_timeout: int = 10
+    websocket_chunk_timeout: int = 60  # Increased timeout for larger 40-second chunks
     websocket_max_session_duration: int = 7200
-    websocket_audio_buffer_size: int = 8192
+    websocket_audio_buffer_size: int = (
+        1280000  # Large buffer for 40-second chunks (40s * 16000Hz * 2 bytes)
+    )
     websocket_sample_rate: int = 16000
     websocket_channels: int = 1
-    websocket_chunk_duration: float = 3.0  # Longer chunks for better context
-    websocket_overlap_duration: float = 0.2  # Reduced overlap to minimize repetition
-    websocket_whisper_model: str = "base"
+    websocket_chunk_duration: float = (
+        40.0  # Large chunks for much better Whisper context
+    )
+    websocket_overlap_duration: float = (
+        2.0  # Longer overlap for better continuity with large chunks
+    )
+    websocket_whisper_model: str = (
+        "small"  # Use better model since we have larger chunks
+    )
 
     class Config:
         env_file = ".env"

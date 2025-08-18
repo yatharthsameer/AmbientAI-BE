@@ -1,0 +1,9 @@
+# Requirements for frontend automation testing
+playwright>=1.40.0
+pydub>=0.25.1
+websockets>=12.0
+requests>=2.31.0
+
+# Optional: for advanced audio processing
+numpy>=1.24.0
+scipy>=1.11.0
