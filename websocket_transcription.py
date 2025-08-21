@@ -28,7 +28,7 @@ from transcription import TranscriptionService
 
 class AudioChunkProcessor:
     """Processes audio chunks for real-time transcription."""
-    
+
     def __init__(self, session_config: WebSocketSettings):
         self.config = session_config
         self.audio_buffer: List[np.ndarray] = []
@@ -36,26 +36,29 @@ class AudioChunkProcessor:
         self.chunk_counter = 0
         self.session_start_time = time.time()
         self.last_chunk_time = 0.0
-        
+
         # Audio processing parameters
         self.sample_rate = session_config.sample_rate
         self.channels = session_config.channels
         self.chunk_duration = session_config.chunk_duration
-        
+
         # Deduplication tracking
         self.recent_transcripts = []  # Store recent transcripts for deduplication
         self.max_recent_transcripts = 5  # Keep last 5 transcripts for comparison
+        self.previous_chunks: List[Dict[str, Any]] = (
+            []
+        )  # Store previous chunks for timestamp dedup
         self.overlap_duration = session_config.overlap_duration
         self.min_chunk_size = int(self.sample_rate * self.chunk_duration)
         self.overlap_size = int(self.sample_rate * self.overlap_duration)
-        
+
         # Initialize transcription service
         self.transcription_service = TranscriptionService()
-        
+
         # Performance tracking
         self.processing_times = []
         self.confidence_scores = []
-        
+
     async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
         """
         Process incoming audio chunk and return transcription result.
@@ -67,18 +70,30 @@ class AudioChunkProcessor:
             Dictionary with transcription result or None if not ready
         """
         start_time = time.time()
-        
+
         try:
             # Convert bytes to numpy array (assume PCM 16-bit)
             audio_array = np.frombuffer(audio_data, dtype=np.int16)
-            
+
             # Normalize to float32 [-1.0, 1.0]
             audio_float = audio_array.astype(np.float32) / 32768.0
-            
+
             # Add to buffer
             self.audio_buffer.append(audio_float)
             self.buffer_duration += len(audio_float) / self.sample_rate
-            
+
+            # Bound the live buffer to avoid runaway memory
+            max_samples = int(
+                self.sample_rate * (self.chunk_duration + self.overlap_duration) * 2
+            )
+            total_samples = sum(len(ch) for ch in self.audio_buffer)
+            if total_samples > max_samples:
+                # Keep only the last max_samples worth of audio
+                keep = max_samples
+                merged = np.concatenate(self.audio_buffer)
+                self.audio_buffer = [merged[-keep:]]
+                self.buffer_duration = len(self.audio_buffer[0]) / self.sample_rate
+
             # Check if we have enough data for processing
             if self._should_process_buffer():
                 result = await self._transcribe_buffer()
@@ -86,7 +101,7 @@ class AudioChunkProcessor:
                     # Calculate processing metrics
                     processing_time = (time.time() - start_time) * 1000  # ms
                     self.processing_times.append(processing_time)
-                    
+
                     result.update({
                         "chunk_index": self.chunk_counter,
                         "processing_time_ms": processing_time,
@@ -94,10 +109,10 @@ class AudioChunkProcessor:
                         "audio_duration": self.chunk_duration,
                         "audio_size_bytes": len(audio_data)
                     })
-                    
+
                     self.chunk_counter += 1
                     return result
-                    
+
         except Exception as e:
             logger.error(f"Error processing audio chunk: {e}")
             return {
@@ -106,26 +121,26 @@ class AudioChunkProcessor:
                 "chunk_index": self.chunk_counter,
                 "session_time": time.time() - self.session_start_time
             }
-        
+
         return None
-    
+
     def _should_process_buffer(self) -> bool:
         """Check if buffer has enough data for processing."""
         total_samples = sum(len(chunk) for chunk in self.audio_buffer)
         return total_samples >= self.min_chunk_size
-    
+
     async def _transcribe_buffer(self) -> Optional[Dict[str, Any]]:
         """Transcribe the current audio buffer."""
         try:
             # Concatenate buffer chunks
             if not self.audio_buffer:
                 return None
-                
+
             combined_audio = np.concatenate(self.audio_buffer)
-            
+
             # Extract chunk for processing (with overlap)
             chunk_samples = combined_audio[:self.min_chunk_size]
-            
+
             # Keep overlap for next processing
             if len(combined_audio) > self.min_chunk_size:
                 overlap_samples = combined_audio[self.min_chunk_size - self.overlap_size:]
@@ -134,106 +149,235 @@ class AudioChunkProcessor:
             else:
                 self.audio_buffer = []
                 self.buffer_duration = 0.0
-            
+
             # Transcribe the chunk
             transcript_result = await self._transcribe_audio_chunk(chunk_samples)
-            
+
             if transcript_result and transcript_result.get("text", "").strip():
-                transcript_text = transcript_result["text"].strip()
-                
-                # Check for duplicates
-                if self._is_duplicate_transcript(transcript_text):
-                    logger.debug(f"Skipping duplicate transcript: {transcript_text}")
+                # Timestamp-based overlap trimming
+                deduped_text = self._deduplicate_by_timestamps(
+                    transcript_result,
+                    self.previous_chunks,
+                    overlap_duration=self.overlap_duration,
+                ).strip()
+
+                if not deduped_text:
                     return None
-                
-                # Add to recent transcripts for future deduplication
-                self._add_to_recent_transcripts(transcript_text)
-                
-                return {
+
+                transcript_result["text"] = deduped_text
+                transcript_text = deduped_text
+
+                # Record confidence for metrics
+                conf = transcript_result.get("confidence_score")
+                if conf is not None:
+                    if not hasattr(self, "confidence_scores"):
+                        self.confidence_scores = []
+                    self.confidence_scores.append(conf)
+
+                # Advance timestamp correctly
+                hop = self.chunk_duration - self.overlap_duration
+                current_start = self.last_chunk_time
+                current_end = self.last_chunk_time + self.chunk_duration
+                self.last_chunk_time += max(hop, 0.0)
+
+                result = {
                     "type": "transcript",
                     "text": transcript_text,
-                    "confidence": transcript_result.get("confidence_score", 0.0),
+                    "confidence": conf or 0.0,
                     "model_used": transcript_result.get("model_used", "unknown"),
-                    "start_time": self.last_chunk_time,
-                    "end_time": self.last_chunk_time + self.chunk_duration,
-                    "is_final": True
+                    "start_time": current_start,
+                    "end_time": current_end,
+                    "is_final": True,
+                    "segments": transcript_result.get(
+                        "segments", []
+                    ),  # Store segments for timestamp dedup
                 }
-            
+
+                # Store this chunk for future timestamp-based deduplication
+                self.previous_chunks.append(result)
+                # Keep only last few chunks to avoid memory growth
+                if len(self.previous_chunks) > 3:
+                    self.previous_chunks = self.previous_chunks[-3:]
+
+                return result
+
             return None
-            
+
         except Exception as e:
             logger.error(f"Buffer transcription failed: {e}")
             return None
-    
+
     async def _transcribe_audio_chunk(self, audio_data: np.ndarray) -> Optional[Dict[str, Any]]:
-        """Transcribe a single audio chunk using Whisper."""
+        """Transcribe a single audio chunk using Whisper - direct array processing."""
         try:
-            # Check if audio chunk has sufficient energy (not silence)
+            # Check if audio chunk has sufficient energy (not silence) - lowered threshold since VAD is enabled
             audio_energy = np.sqrt(np.mean(audio_data ** 2))
-            if audio_energy < 0.01:  # Skip very quiet chunks
+            if audio_energy < 0.005:  # Lowered from 0.01 to avoid dropping quiet speech
                 logger.debug("Skipping silent audio chunk")
                 return None
-            
-            # Create temporary file for Whisper
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-                temp_path = temp_file.name
-                
-                # Write audio to temporary file
-                sf.write(temp_path, audio_data, self.sample_rate)
-                
-                # Transcribe using the existing transcription service
-                try:
-                    result = self.transcription_service.transcribe_audio(
-                        temp_path,
-                        model_name=self.config.whisper_model_realtime,
-                        language="en",  # Force English only
-                        temperature=0.0,  # Deterministic results
-                        task="transcribe"
-                        # Use default beam_size=5 and patience=1.0 for better accuracy
-                    )
-                    return result
-                finally:
-                    # Clean up temporary file after transcription completes
-                    try:
-                        os.unlink(temp_path)
-                    except FileNotFoundError:
-                        # File already deleted, that's fine
-                        pass
-                
+
+            # Direct array transcription - no temp files
+            result = self.transcription_service.transcribe_array(
+                audio_data,
+                sr=self.sample_rate,
+                model_name=self.config.whisper_model_realtime,
+                language="en",  # Force English only
+                temperature=0.0,  # Deterministic results
+                task="transcribe",
+                beam_size=2,  # Reduced from 3 to 2 for lower CPU latency
+                patience=1.0,
+                word_timestamps=True,  # Enable for clean stitching
+                vad_filter=True,  # Enable model's own VAD
+                vad_parameters={
+                    "min_silence_duration_ms": 600,
+                    "speech_pad_ms": 150,
+                },
+                no_speech_threshold=0.6,  # Reduce garbage
+                compression_ratio_threshold=2.3,
+                logprob_threshold=-0.5,
+                condition_on_previous_text=False,  # Disable for live to reduce drift
+            )
+            return result
+
         except Exception as e:
             logger.error(f"Chunk transcription failed: {e}")
             return None
-    
+
+    def _deduplicate_by_timestamps(
+        self,
+        current_result: Dict[str, Any],
+        previous_chunks: List[Dict[str, Any]],
+        overlap_duration: float = 2.0,
+    ) -> str:
+        """
+        Deduplicate transcription results using word timestamps.
+        Removes words from current result that overlap with previous chunks.
+        """
+        if not previous_chunks or not current_result.get("segments"):
+            return current_result.get("text", "")
+
+        current_segments = current_result.get("segments", [])
+        if not current_segments:
+            return current_result.get("text", "")
+
+        # Get the last chunk's end time to determine overlap region
+        last_chunk = previous_chunks[-1] if previous_chunks else None
+        if not last_chunk or not last_chunk.get("segments"):
+            return current_result.get("text", "")
+
+        # Find the overlap threshold - words starting before this time should be removed
+        last_chunk_segments = last_chunk.get("segments", [])
+        last_chunk_end = 0.0
+        for seg in last_chunk_segments:
+            seg_end = float(seg.get("end", 0.0))
+            if seg_end > last_chunk_end:
+                last_chunk_end = seg_end
+
+        overlap_threshold = max(0.0, last_chunk_end - overlap_duration)
+
+        # Filter words from current segments that don't overlap
+        filtered_text_parts = []
+        for segment in current_segments:
+            words = segment.get("words", [])
+            if not words:
+                # If no word timestamps, use segment timestamp
+                seg_start = float(segment.get("start", 0.0))
+                if seg_start >= overlap_threshold:
+                    filtered_text_parts.append(segment.get("text", "").strip())
+            else:
+                # Filter words by timestamp
+                kept_words = []
+                for word in words:
+                    word_start = float(word.get("start", 0.0))
+                    if word_start >= overlap_threshold:
+                        kept_words.append(word.get("word", "").strip())
+
+                if kept_words:
+                    filtered_text_parts.append(" ".join(kept_words))
+
+        return " ".join(filtered_text_parts).strip()
+
     def _is_duplicate_transcript(self, new_text: str) -> bool:
         """Check if the new transcript is a duplicate of recent ones."""
         if not new_text or not new_text.strip():
             return True
-        
+
         new_text_clean = new_text.strip().lower()
-        
+
         # Check against recent transcripts
         for recent_text in self.recent_transcripts:
             recent_clean = recent_text.strip().lower()
-            
+
             # Check for exact match
             if new_text_clean == recent_clean:
                 return True
-            
+
             # Check for substantial overlap (>80% similarity)
             if len(new_text_clean) > 5 and len(recent_clean) > 5:
                 # Simple similarity check - count common words
                 new_words = set(new_text_clean.split())
                 recent_words = set(recent_clean.split())
-                
+
                 if new_words and recent_words:
                     overlap = len(new_words.intersection(recent_words))
                     similarity = overlap / max(len(new_words), len(recent_words))
-                    
+
                     if similarity > 0.8:  # 80% word overlap
                         return True
-        
+
         return False
-    
+
+    def _deduplicate_by_timestamps(
+        self,
+        current_result: Dict[str, Any],
+        previous_results: List[Dict[str, Any]],
+        overlap_duration: float = 2.0,
+    ) -> str:
+        """
+        Deduplicate overlapping transcripts using word-level timestamps.
+
+        Args:
+            current_result: Current transcription result with word timestamps
+            previous_results: List of previous results for comparison
+            overlap_duration: Expected overlap duration in seconds
+
+        Returns:
+            Deduplicated text from current result
+        """
+        if not current_result.get("segments") or not previous_results:
+            return current_result.get("text", "")
+
+        # Get word-level timestamps from current result
+        current_words = []
+        for segment in current_result.get("segments", []):
+            for word in segment.get("words", []):
+                current_words.append(
+                    {
+                        "word": word.get("word", "").strip(),
+                        "start": word.get("start", 0.0),
+                        "end": word.get("end", 0.0),
+                    }
+                )
+
+        if not current_words:
+            return current_result.get("text", "")
+
+        # Find words that fall outside the overlap region
+        overlap_threshold = overlap_duration
+        deduplicated_words = []
+
+        for word in current_words:
+            # Keep words that start after the overlap threshold
+            if word["start"] >= overlap_threshold:
+                deduplicated_words.append(word["word"])
+
+        # If no words survive deduplication, return the full text
+        # (this can happen with very short segments)
+        if not deduplicated_words:
+            return current_result.get("text", "")
+
+        return " ".join(deduplicated_words).strip()
+
     def _add_to_recent_transcripts(self, text: str):
         """Add transcript to recent list for deduplication."""
         if text and text.strip():
@@ -241,12 +385,12 @@ class AudioChunkProcessor:
             # Keep only the most recent transcripts
             if len(self.recent_transcripts) > self.max_recent_transcripts:
                 self.recent_transcripts.pop(0)
-    
+
     def get_session_metrics(self) -> Dict[str, Any]:
         """Get performance metrics for the current session."""
         if not self.processing_times:
             return {}
-            
+
         return {
             "chunks_processed": self.chunk_counter,
             "avg_processing_time_ms": sum(self.processing_times) / len(self.processing_times),

@@ -24,11 +24,14 @@ numpy
 accelerate
 flower
 sentence-transformers
+faster-whisper
 
 # Audio Processing
 librosa
 soundfile
 pydub
+webrtcvad
+soxr  # High-quality audio resampling
 
 # AI/ML Services
 google-generativeai

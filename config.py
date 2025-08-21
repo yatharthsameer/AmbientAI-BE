@@ -48,7 +48,7 @@ class FileUploadSettings(BaseModel):
 
 class ASRSettings(BaseModel):
     """Automatic Speech Recognition settings."""
-    whisper_model: str = "base"
+    whisper_model: str = "large"
     device: str = "cpu"
     language: Optional[str] = None
     task: str = "transcribe"  # or "translate"
@@ -95,19 +95,14 @@ class WebSocketSettings(BaseModel):
     chunk_timeout: int = 60  # seconds - Increased timeout for larger 40-second chunks
     max_session_duration: int = 7200  # 2 hours in seconds
     audio_buffer_size: int = (
-        1280000  # bytes - Large buffer for 40-second chunks (40s * 16000Hz * 2 bytes)
+        800000  # bytes - Buffer for 25-second chunks (25s * 16000Hz * 2 bytes)
     )
     sample_rate: int = 16000
     channels: int = 1
-    chunk_duration: float = (
-        40.0  # seconds - Large chunks for much better Whisper context
-    )
-    overlap_duration: float = (
-        2.0  # seconds - Longer overlap for better continuity with large chunks
-    )
-    whisper_model_realtime: str = (
-        "small"  # Use better model since we have larger chunks
-    )
+    chunk_duration: float = 25.0  # seconds - Reduced for faster live processing
+    overlap_duration: float = 2.0  # seconds - Keep 2s overlap for clean stitching
+    whisper_model_realtime: str = "base.en"  # CPU-optimized model for live processing
+    whisper_model_final: str = "medium.en"  # CPU-stable model for final processing
 
 
 class Settings(BaseSettings):
@@ -136,7 +131,7 @@ class Settings(BaseSettings):
     allowed_audio_formats: str = "mp3,wav,m4a,ogg,flac"
 
     # ASR
-    whisper_model: str = "base"
+    whisper_model: str = "large-v3"  # Default model for batch/final processing
     whisper_device: str = "cpu"
 
     # Q&A
@@ -155,21 +150,21 @@ class Settings(BaseSettings):
     # WebSocket Settings
     websocket_max_connections: int = 100
     websocket_heartbeat_interval: int = 30
-    websocket_chunk_timeout: int = 60  # Increased timeout for larger 40-second chunks
+    websocket_chunk_timeout: int = (
+        60  # Timeout for 25-second chunks with processing overhead
+    )
     websocket_max_session_duration: int = 7200
     websocket_audio_buffer_size: int = (
-        1280000  # Large buffer for 40-second chunks (40s * 16000Hz * 2 bytes)
+        800000  # Buffer for 25-second chunks (25s * 16000Hz * 2 bytes)
     )
     websocket_sample_rate: int = 16000
     websocket_channels: int = 1
-    websocket_chunk_duration: float = (
-        40.0  # Large chunks for much better Whisper context
-    )
-    websocket_overlap_duration: float = (
-        2.0  # Longer overlap for better continuity with large chunks
-    )
-    websocket_whisper_model: str = (
-        "small"  # Use better model since we have larger chunks
+    websocket_chunk_duration: float = 25.0  # Reduced for faster live processing
+    websocket_overlap_duration: float = 2.0  # Keep 2s overlap for clean stitching
+    # CPU MVP model choices: live uses base.en for stability/speed, final uses medium.en for CPU stability
+    websocket_whisper_model: str = "base.en"  # CPU-optimized for live processing
+    websocket_whisper_model_final: str = (
+        "medium.en"  # CPU-stable for final processing (was large-v3)
     )
 
     class Config:
@@ -238,6 +233,7 @@ class Settings(BaseSettings):
             chunk_duration=self.websocket_chunk_duration,
             overlap_duration=self.websocket_overlap_duration,
             whisper_model_realtime=self.websocket_whisper_model,
+            whisper_model_final=self.websocket_whisper_model_final,
         )
 
 
